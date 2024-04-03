@@ -18,6 +18,9 @@ HALF_PI = math.pi / 2
 window = pygame.display.set_mode(SCREEN_SIZE)
 player_image = pygame.transform.smoothscale_by(pygame.image.load("assets/swordfish.png").convert_alpha(), 0.25)
 
+def lerp(start, end, a):
+    return (1 - a) * start + a * end
+
 class Sprite(pygame.sprite.Sprite):
     def __init__(self, manager: ObjectManager, groups: list[Literal["render", "update"]] = ["render", "update"]):
         super().__init__()
@@ -85,7 +88,11 @@ class Player(Sprite):
 
         # when entering water
         if now_in_water and not self.in_water:
-            self.manager.get("ocean").add_wave(self.rect.centerx)
+            self.manager.get("ocean").splash(self.rect.centerx, 10)
+        
+        # when exiting water
+        if not now_in_water and self.in_water:
+            self.manager.get("ocean").splash(self.rect.centerx, -10)
 
         # apply gravity
         if not now_in_water:
@@ -119,8 +126,27 @@ class Player(Sprite):
         self.in_water = now_in_water
 
 class WaterSpring(Sprite):
-    def __init__(self, manager):
-        super().__init__(manager)
+    def __init__(self, manager, position: Vec2, spring_constant: float, dampening: float):
+        super().__init__(manager, ["update"])
+
+        self.extension = 0
+        self.origin = position[1]
+
+        self.spring_constant = spring_constant
+        self.dampening = dampening
+
+        self.velocity = 0
+        self.force = 0
+
+        self.image = pygame.Surface((4, 4))
+        self.rect = self.image.get_rect(center = position)
+
+    def update(self):
+        force = -self.extension * self.spring_constant - self.velocity * self.dampening
+        self.velocity += force
+        self.extension += self.velocity
+
+        self.rect.centery = self.origin + self.extension
 
 class Ocean(Sprite):
     def __init__(self, manager, layer_height: int):
@@ -134,28 +160,96 @@ class Ocean(Sprite):
             (65, 185, 238),
         ]
 
-    def add_wave(self, position: float):
-        pass
+        self.target_wave_height = 80
+        self.player: Player = self.manager.get("player")
+        self.camera: Camera = self.manager.get("camera")
+
+        self.wave_interval = 8
+        self.spread = 0.1 / self.wave_interval
+        self.passes = 8
+        self.add_springs()
+
+    def add_springs(self):
+        self.springs: dict[int, WaterSpring] = {}
+        for i in range(0, int(SCREEN_SIZE.x * 2), self.wave_interval):
+            self.add_spring(i)
+
+    def update_springs(self):
+        for _ in range(self.passes):
+            for i, spring in self.springs.items():
+                left_neighbour = self.springs.get(i - self.wave_interval, None)
+                right_neighbour = self.springs.get(i + self.wave_interval, None)
+
+                if left_neighbour:
+                    left_neighbour.velocity += self.spread * (spring.extension - left_neighbour.extension)
+
+                if right_neighbour:
+                    right_neighbour.velocity += self.spread * (spring.extension - right_neighbour.extension)
+
+    def add_spring(self, position: int):
+        spring = WaterSpring(self.manager, (position, 0), 0.015, 0.03)
+        self.springs[position] = spring
+        self.manager.add(spring)
+
+    def add_more_springs(self):
+        left_most_point = min(self.springs.keys())
+        right_most_point = max(self.springs.keys())
+
+        while left_most_point > self.player.rect.centerx - SCREEN_SIZE.x:
+            pos = left_most_point - self.wave_interval
+            self.add_spring(pos)
+            left_most_point = pos
+
+        while left_most_point < self.player.rect.centerx - SCREEN_SIZE.x:
+            spring = self.springs[left_most_point]
+            spring.kill()
+            del self.springs[left_most_point]
+            left_most_point += self.wave_interval
+        
+        while right_most_point < self.player.rect.centerx + SCREEN_SIZE.x:
+            pos = right_most_point + self.wave_interval
+            self.add_spring(pos)
+            right_most_point = pos
+
+        while right_most_point > self.player.rect.centerx + SCREEN_SIZE.x:
+            spring = self.springs[right_most_point]
+            spring.kill()
+            del self.springs[right_most_point]
+            right_most_point -= self.wave_interval
+
+    def splash(self, position: float, speed: float, size: int = 4):
+        original_index = int(position // self.wave_interval * self.wave_interval)
+        for i in range(original_index - size * self.wave_interval, original_index + size * self.wave_interval, self.wave_interval):
+            spring = self.springs.get(i, None)
+            if spring:
+                velocity = lerp(speed, 0, abs(original_index - i) / (size * self.wave_interval))
+
+                spring.velocity += velocity
+
+    def draw_waves(self, surface: pygame.Surface):
+        points = []
+        for x, spring in self.springs.items():
+            points.append(self.camera.world_to_screen((x, spring.origin + spring.extension)))
+
+        points.sort(key = lambda point: point.x)
+
+        points.insert(0, (0, SCREEN_SIZE.y))
+        points.append((SCREEN_SIZE.x, SCREEN_SIZE.y))
+
+        pygame.draw.polygon(surface, self.colour, points)
 
     def update(self):
-        player = self.manager.get("player")
-
-        current_layer = min(max(0, int(player.rect.y // LAYER_HEIGHT)), len(self.colour_palette) - 1)
+        current_layer = min(max(0, int(self.player.rect.y // LAYER_HEIGHT)), len(self.colour_palette) - 1)
 
         self.colour = self.colour_palette[current_layer]
+        self.add_more_springs()
+        self.update_springs()
 
     def render(self, surface):
-        surface.fill(self.colour)
+        covered_rect = pygame.Rect(0, max(self.manager.get("camera").world_to_screen(pygame.Vector2(0, 0)).y + self.target_wave_height, 0), *SCREEN_SIZE)
+        # surface.fill(self.colour, covered_rect)
 
-class Sky(Sprite):
-    def __init__(self, manager):
-        super().__init__(manager)
-        self.image = pygame.Surface((SCREEN_SIZE.x * 2, SCREEN_SIZE.y * 2))
-        self.image.fill((197, 240, 251))
-        self.rect = self.image.get_rect(bottom = 0)
-    
-    def update(self):
-        self.rect.centerx = self.manager.get("player").rect.centerx
+        self.draw_waves(surface)
 
 T = TypeVar("T", bound = Sprite)
 class ObjectManager:
@@ -187,15 +281,15 @@ class FishLevel:
         self.manager = ObjectManager()
         self.manager.add_obj(self, "level")
 
-        self.background = self.manager.add(Ocean(self.manager, LAYER_HEIGHT))
-        self.sky = self.manager.add(Sky(self.manager))
         self.player = self.manager.add(Player(self.manager, SCREEN_SIZE / 2))
         self.camera = self.manager.add(Camera(self.manager, self.player))
+        self.background = self.manager.add(Ocean(self.manager, LAYER_HEIGHT))
 
     def update(self):
         self.manager.update_group.update()
 
     def render(self, surface: pygame.Surface):
+        surface.fill((197, 240, 251))
         self.background.render(surface)
         self.camera.render(surface, self.manager.render_group)
 
@@ -221,6 +315,8 @@ def main():
         test_level.render(window)
 
         pygame.display.update()
+
+        # print(clock.get_fps())
 
     pygame.quit()
 
