@@ -14,9 +14,9 @@ SCREEN_SIZE = pygame.Vector2(1280, 720)
 FPS = 60
 LAYER_HEIGHT = SCREEN_SIZE.y * 2
 HALF_PI = math.pi / 2
+ANIMATION_TIME = 10
 
 window = pygame.display.set_mode(SCREEN_SIZE)
-player_image = pygame.transform.smoothscale_by(pygame.image.load("assets/swordfish.png").convert_alpha(), 0.25)
 
 def lerp(start, end, a):
     return (1 - a) * start + a * end
@@ -62,9 +62,16 @@ class Player(Sprite):
         super().__init__(manager)
         self.id = "player"
         
-        self.image = player_image
+        self.animation_frames = []
+        self.current_index = 0
+        self.animation_counter = 0
+        for i in range(2):
+            self.animation_frames.append(pygame.transform.scale_by(pygame.image.load(f"assets/swordfish_{i}.png").convert_alpha(), 0.25))
+
+        self.image = self.animation_frames[0]
         self.rect = self.image.get_rect(center = position)
         self.position = pygame.Vector2(position)
+        self.direction = 0
 
         self.speed = 1.5
 
@@ -72,12 +79,22 @@ class Player(Sprite):
 
         self.in_water = True
 
+    def update_animations(self):
+        self.animation_counter += 1
+        if self.animation_counter >= ANIMATION_TIME:
+            self.current_index += 1
+            if self.current_index == len(self.animation_frames):
+                self.current_index = 0
+            self.animation_counter = 0
+
     def update(self):
+
         # move towards mouse
         camera = self.manager.get("camera")
         dv: pygame.Vector2 = camera.screen_to_world(pygame.mouse.get_pos()) - self.position
 
         if pygame.mouse.get_pressed()[0] and self.rect.centery >= 0:
+            self.update_animations()
             dv.scale_to_length(self.speed)
             self.velocity += dv
 
@@ -88,11 +105,11 @@ class Player(Sprite):
 
         # when entering water
         if now_in_water and not self.in_water:
-            self.manager.get("ocean").splash(self.rect.centerx, 10)
+            self.manager.get("ocean").splash(self.rect.centerx, lerp(0, 10, min(abs(self.velocity.y), 30) / 30))
         
         # when exiting water
         if not now_in_water and self.in_water:
-            self.manager.get("ocean").splash(self.rect.centerx, -10)
+            self.manager.get("ocean").splash(self.rect.centerx, lerp(0, -10, min(abs(self.velocity.y), 30) / 30))
 
         # apply gravity
         if not now_in_water:
@@ -106,19 +123,21 @@ class Player(Sprite):
             if self.velocity.y > 2:
                 self.velocity.y = 0
 
-        # clamp velocity
-        if -0.001 < self.velocity.x < 0.001: self.velocity.x = 0
-        if -0.001 < self.velocity.y < 0.001: self.velocity.y = 0
-
         self.position += self.velocity
 
+        if self.velocity.magnitude() < 0.01:
+            self.velocity = pygame.Vector2(0, 0)
+
         # look towards
-        self.direction = math.atan2(self.velocity.y, self.velocity.x)
-        image_used = player_image
+        if self.velocity.magnitude() != 0:
+            self.direction = math.atan2(self.velocity.y, self.velocity.x)
+
+        image_used = self.animation_frames[self.current_index]
         if self.direction > HALF_PI or self.direction < -HALF_PI:
             image_used = pygame.transform.flip(image_used, False, True)
 
         self.image = pygame.transform.rotate(image_used, -math.degrees(self.direction))
+
         self.rect = self.image.get_rect()
 
         self.rect.center = self.position
@@ -237,6 +256,8 @@ class Ocean(Sprite):
         points.append((SCREEN_SIZE.x, SCREEN_SIZE.y))
 
         pygame.draw.polygon(surface, self.colour, points)
+
+        pygame.draw.lines(surface, (255, 255, 255), False, points[1:-2], width = 3)
 
     def update(self):
         current_layer = min(max(0, int(self.player.rect.y // LAYER_HEIGHT)), len(self.colour_palette) - 1)
