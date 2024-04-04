@@ -3,13 +3,15 @@ from __future__ import annotations
 import math
 import pygame
 import random
-from typing import TypeVar, Literal
+from typing import TypeVar, Literal, get_args
+
+import pygame.gfxdraw
 
 pygame.init()
 
 Vec2 = tuple[float, float]
 Colour = tuple[int, int, int]
-Group = Literal["render", "update", "collide", "enemy"]
+Group = Literal["render", "update", "card", "fish", "gui"]
 Axis = Literal["x", "y"]
 
 SCREEN_SIZE = pygame.Vector2(1280, 720)
@@ -31,6 +33,21 @@ def lerp(start: float, end: float, a: float):
 def lerp_colour(start: Colour, end: Colour, a: float):
     return (lerp(start[0], end[0], a), lerp(start[1], end[1], a), lerp(start[2], end[2], a))
 
+def vector_from_polar(angle: float, magnitude: float) -> pygame.Vector2:
+    return pygame.Vector2(math.cos(angle) * magnitude, math.sin(angle) * magnitude)
+
+def clamp(value: float, min: float, max: float):
+    if value < min:
+        return min
+    if value > max:
+        return max
+    return value
+
+def move_towards_angle(direction_to_move: float, target_direction: float, max_turn: float) -> float:
+    delta = target_direction - direction_to_move
+    delta = clamp(delta, -max_turn, max_turn)
+    return direction_to_move + delta
+
 def draw_gradient(surface: pygame.Surface, start_colour: Colour, end_colour: Colour) -> pygame.Surface:
     """Draw vertical gradient onto surface. Modifies original surface."""
     width, height = surface.get_size()
@@ -41,45 +58,41 @@ def draw_gradient(surface: pygame.Surface, start_colour: Colour, end_colour: Col
         pygame.draw.line(surface, colour, (0, i), (width, i))
     return surface
 
+T = TypeVar("T", bound = "Sprite")
+class Manager:
+    def __init__(self):
+        self.objects = {}
+        self.groups: dict[Group, pygame.sprite.Group] = {}
+        for string in get_args(Group):
+            self.groups[string] = pygame.sprite.Group()
+
+    def get(self, key: str):
+        return self.objects[key]
+    
+    def add(self, sprite: T) -> T:
+        if sprite.id != "":
+            self.objects[sprite.id] = sprite
+
+        for key, group in self.groups.items():
+            if key in sprite.group_keys:
+                group.add(sprite)
+
+        return sprite
+    
+    def add_obj(self, obj, key):
+        self.objects[key] = obj
+        return obj
+
 class Sprite(pygame.sprite.Sprite):
-    def __init__(self, manager: ObjectManager, groups: list[Group] = ["render", "update"]):
+    def __init__(self, manager: Manager, groups: list[Group] = ["render", "update"]):
         super().__init__()
         self.manager = manager
         self.group_keys = groups
         self.id = ""
         self.z_index = 0
 
-class Camera(Sprite):
-    def __init__(self, manager, target: Sprite):
-        super().__init__(manager, ["update"])
-        self.id = "camera"
-
-        self.target = target
-        self.position = pygame.Vector2(target.rect.center)
-
-        self.half_screen_size = SCREEN_SIZE / 2
-
-    def update(self):
-        # move towards target with smoothing
-        self.position += (self.target.rect.center - self.position) * 0.2
-
-    def world_to_screen(self, coords: Vec2) -> Vec2:
-        return coords - self.position + self.half_screen_size
-    
-    def screen_to_world(self, coords: Vec2) -> Vec2:
-        return coords + self.position - self.half_screen_size
-
-    def render(self, surface: pygame.Surface, group: pygame.sprite.Group):
-        offset = pygame.Vector2(
-            int(self.position.x) - self.half_screen_size.x,
-            int(self.position.y) - self.half_screen_size.y
-        )
-
-        for item in sorted(group.sprites(), key = lambda sprite: sprite.z_index):
-            surface.blit(item.image, item.rect.topleft - offset)
-
 class Player(Sprite):
-    def __init__(self, manager: ObjectManager, initial_velocity: Vec2 = (0, 0)):
+    def __init__(self, manager: Manager, initial_velocity: Vec2 = (0, 0)):
         super().__init__(manager)
         self.id = "player"
         self.z_index = 1
@@ -201,8 +214,8 @@ class WaterSpring(Sprite):
         self.extension += self.velocity
 
 class Card(Sprite):
-    def __init__(self, manager: ObjectManager, position: Vec2, suit: int, value: int):
-        super().__init__(manager)
+    def __init__(self, manager: Manager, position: Vec2, suit: int, value: int):
+        super().__init__(manager, groups = ["render", "update", "card"])
         self.image = self.manager.get("card-factory").get_image(suit, value)
         self.rect = self.image.get_rect(center = position)
         self.suit = suit
@@ -215,7 +228,7 @@ class Card(Sprite):
             self.kill()
 
 class CardFactory:
-    def __init__(self, manager: ObjectManager):
+    def __init__(self, manager: Manager):
         self.manager = manager
 
         self.suits = []
@@ -362,39 +375,8 @@ class Ocean(Sprite):
 
         self.draw_waves(surface)
 
-T = TypeVar("T", bound = Sprite)
-class ObjectManager:
-    def __init__(self):
-        self.objects = {}
-        self.render_group = pygame.sprite.Group()
-        self.update_group = pygame.sprite.Group()
-        self.collide_group = pygame.sprite.Group()
-        self.enemy_group = pygame.sprite.Group()
-
-    def get(self, key: str):
-        return self.objects[key]
-    
-    def add(self, sprite: T) -> T:
-        if sprite.id != "":
-            self.objects[sprite.id] = sprite
-        
-        if "render" in sprite.group_keys:
-            self.render_group.add(sprite)
-        if "update" in sprite.group_keys:
-            self.update_group.add(sprite)
-        if "collide" in sprite.group_keys:
-            self.collide_group.add(sprite)
-        if "enemy" in sprite.group_keys:
-            self.enemy_group.add(sprite)
-
-        return sprite
-    
-    def add_obj(self, obj, key):
-        self.objects[key] = obj
-        return obj
-
 class WallLeft(Sprite):
-    def __init__(self, manager: ObjectManager):
+    def __init__(self, manager: Manager):
         super().__init__(manager, groups = ["render"])
         self.id = "left-wall"
 
@@ -413,7 +395,7 @@ class WallLeft(Sprite):
         self.image = beach_mask.to_surface(unsetsurface = self.image, setcolor = None)
 
 class WallRight(Sprite):
-    def __init__(self, manager: ObjectManager):
+    def __init__(self, manager: Manager):
         super().__init__(manager, ["render"])
         self.id = "right-wall"
         border_tile = pygame.image.load("assets/border.png").convert_alpha()
@@ -424,7 +406,7 @@ class WallRight(Sprite):
         self.rect = self.image.get_rect(left = WORLD_RIGHT, top = -extra_stuff)
 
 class Floor(Sprite):
-    def __init__(self, manager: ObjectManager):
+    def __init__(self, manager: Manager):
         super().__init__(manager, groups = ["render"])
         self.id = "floor"
 
@@ -432,10 +414,74 @@ class Floor(Sprite):
         self.rect = self.image.get_rect(top = LAYER_HEIGHT * 5, left = 0)
         self.image.fill(COLOUR_BORDER)
 
+class Compass(Sprite):
+    def __init__(self, manager: Manager):
+        super().__init__(manager, ["update", "gui"])
+        self.size = (128, 128)
+        self.direction = 0
+
+        self.player: Player = self.manager.get("player")
+
+        self.bg = self.render_background()
+        self.draw_image()
+
+    def render_background(self) -> pygame.Surface:
+        surf = pygame.Surface(self.size, pygame.SRCALPHA)
+        rect = surf.get_rect(bottomright = (SCREEN_SIZE - (8, 8)))
+
+        radius = rect.width / 2
+
+        pygame.draw.circle(surf, (255, 255, 255), (radius, radius), radius, 3)
+
+        steps = 60
+        increment = math.pi * 2 / steps
+        for i in range(steps):
+            angle = increment * i
+            width = 2 if i % (steps / 4) == 0 else 1
+            line_size = 12 if i % (steps / 4) == 0 else 6
+
+            start = (radius, radius) + vector_from_polar(angle, radius - 1)
+            end = (radius, radius) + vector_from_polar(angle, radius - line_size)
+
+            pygame.draw.line(surf, (255, 255, 255), start, end, width)
+        return surf
+
+    def get_closest_card_direction(self) -> float:
+        def __distance_to_player(sprite):
+            return (pygame.Vector2(sprite.rect.center) - self.player.rect.center).magnitude()
+        
+        if len(self.manager.groups["card"]) == 0: return 0
+
+        closest_card = min(self.manager.groups["card"], key = __distance_to_player)
+        dv = pygame.Vector2(closest_card.rect.center) - self.player.rect.center
+        direction = math.atan2(dv.y, dv.x)
+
+        return direction
+
+    def draw_image(self):
+        self.image = pygame.Surface(self.size, pygame.SRCALPHA)
+        self.rect = self.image.get_rect(bottomright = (SCREEN_SIZE - (8, 8)))
+        self.image.blit(self.bg, (0, 0))
+
+        direction_to_card = self.get_closest_card_direction()
+        self.direction = move_towards_angle(self.direction, direction_to_card, 0.1)
+
+        COMPASS_THICKNESS = 4
+        radius = self.size[0] / 2
+        left_base = (radius, radius) + vector_from_polar(self.direction + math.pi / 2, COMPASS_THICKNESS)
+        right_base = (radius, radius) + vector_from_polar(self.direction - math.pi / 2, COMPASS_THICKNESS)
+        end_pos = pygame.Vector2(radius, radius) + vector_from_polar(self.direction, 40)
+
+        pygame.gfxdraw.aapolygon(self.image, [left_base, right_base, end_pos], (255, 0, 0))
+        pygame.gfxdraw.filled_polygon(self.image, [left_base, right_base, end_pos], (255, 0, 0))
+
+    def update(self):
+        self.draw_image()
+
 class FishLevel:
     def __init__(self, game):
         self.game = game
-        self.manager = ObjectManager()
+        self.manager = Manager()
         self.manager.add_obj(game, "game")
         self.manager.add_obj(self, "level")
 
@@ -447,6 +493,7 @@ class FishLevel:
         self.player = self.manager.add(Player(self.manager, (20, -20)))
         self.camera = self.manager.add(Camera(self.manager, self.player))
         self.background = self.manager.add(Ocean(self.manager, LAYER_HEIGHT))
+        self.compass = self.manager.add(Compass(self.manager))
 
         self.debug_mode = False
         self.debug_font = pygame.font.SysFont("Trebuchet MS", 20, False)
@@ -456,8 +503,8 @@ class FishLevel:
         for i in range(n):
             suit = i // 13
             value = i % 13 + 1
-            # pos = (random.randrange(WORLD_LEFT + 50, WORLD_RIGHT - 50), random.randrange(-500, WORLD_BOTTOM))
-            pos = (suit * 200), value * 200
+            pos = (random.randint(WORLD_LEFT + 50, WORLD_RIGHT - 50), random.randint(-500, WORLD_BOTTOM))
+            # pos = (suit * 200), value * 200
             self.manager.add(Card(self.manager, pos, suit, value))
 
     def on_key_down(self, key: int):
@@ -472,18 +519,51 @@ class FishLevel:
         for x, spring in self.background.springs.items():
             pygame.draw.circle(surface, (0, 0, 0), self.camera.world_to_screen((x, spring.origin + spring.extension)), 2)
 
-        for object in self.manager.render_group:
+        for object in self.manager.groups["render"]:
             pygame.draw.rect(surface, (0, 0, 255), (*self.camera.world_to_screen(object.rect.topleft), *object.rect.size), width = 1)
 
     def update(self):
-        self.manager.update_group.update()
+        self.manager.groups["update"].update()
 
     def render(self, surface: pygame.Surface):
         surface.fill((197, 240, 251))
         self.background.render(surface)
-        self.camera.render(surface, self.manager.render_group)
+        self.camera.render(surface, self.manager.groups["render"])
+
+        for sprite in self.manager.groups["gui"].sprites():
+            surface.blit(sprite.image, sprite.rect)
+
         if self.debug_mode:
             self.draw_debug(surface)
+
+class Camera(Sprite):
+    def __init__(self, manager, target: Sprite):
+        super().__init__(manager, ["update"])
+        self.id = "camera"
+
+        self.target = target
+        self.position = pygame.Vector2(target.rect.center)
+
+        self.half_screen_size = SCREEN_SIZE / 2
+
+    def update(self):
+        # move towards target with smoothing
+        self.position += (self.target.rect.center - self.position) * 0.2
+
+    def world_to_screen(self, coords: Vec2) -> Vec2:
+        return coords - self.position + self.half_screen_size
+    
+    def screen_to_world(self, coords: Vec2) -> Vec2:
+        return coords + self.position - self.half_screen_size
+
+    def render(self, surface: pygame.Surface, group: pygame.sprite.Group):
+        offset = pygame.Vector2(
+            int(self.position.x) - self.half_screen_size.x,
+            int(self.position.y) - self.half_screen_size.y
+        )
+
+        for item in sorted(group.sprites(), key = lambda sprite: sprite.z_index):
+            surface.blit(item.image, item.rect.topleft - offset)
 
 class Game:
     def __init__(self):
