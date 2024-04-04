@@ -9,24 +9,30 @@ pygame.init()
 
 Vec2 = tuple[float, float]
 Colour = tuple[int, int, int]
+Group = Literal["render", "update", "collide", "enemy"]
+Axis = Literal["x", "y"]
 
 SCREEN_SIZE = pygame.Vector2(1280, 720)
 FPS = 60
 LAYER_HEIGHT = SCREEN_SIZE.y * 2
 HALF_PI = math.pi / 2
 ANIMATION_TIME = 10
+FONT = pygame.font.Font(None)
 
-window = pygame.display.set_mode(SCREEN_SIZE)
+WORLD_LEFT = 0
+WORLD_RIGHT = LAYER_HEIGHT * 5
+WORLD_BOTTOM = LAYER_HEIGHT * 5
 
 def lerp(start, end, a):
     return (1 - a) * start + a * end
 
 class Sprite(pygame.sprite.Sprite):
-    def __init__(self, manager: ObjectManager, groups: list[Literal["render", "update"]] = ["render", "update"]):
+    def __init__(self, manager: ObjectManager, groups: list[Group] = ["render", "update"]):
         super().__init__()
         self.manager = manager
         self.group_keys = groups
         self.id = ""
+        self.z_index = 0
 
 class Camera(Sprite):
     def __init__(self, manager, target: Sprite):
@@ -54,13 +60,14 @@ class Camera(Sprite):
             int(self.position.y) - self.half_screen_size.y
         )
 
-        for item in group.sprites():
+        for item in sorted(group.sprites(), key = lambda sprite: sprite.z_index):
             surface.blit(item.image, item.rect.topleft - offset)
 
 class Player(Sprite):
-    def __init__(self, manager, position):
+    def __init__(self, manager: ObjectManager, initial_velocity: Vec2 = (0, 0)):
         super().__init__(manager)
         self.id = "player"
+        self.z_index = 1
         
         self.animation_frames = []
         self.current_index = 0
@@ -69,15 +76,16 @@ class Player(Sprite):
             self.animation_frames.append(pygame.transform.scale_by(pygame.image.load(f"assets/swordfish_{i}.png").convert_alpha(), 0.25))
 
         self.image = self.animation_frames[0]
-        self.rect = self.image.get_rect(center = position)
-        self.position = pygame.Vector2(position)
+        self.rect = self.image.get_rect(bottom = self.manager.get("pier").rect.top, left = 0)
+        self.position = pygame.Vector2(self.rect.center)
         self.direction = 0
 
         self.speed = 1.5
 
-        self.velocity = pygame.Vector2()
+        self.velocity = pygame.Vector2(initial_velocity)
 
-        self.in_water = True
+        self.in_water = self.rect.centery > 0
+        self.time_since_in_air = 0 if self.in_water else 100
 
     def update_animations(self):
         self.animation_counter += 1
@@ -87,13 +95,20 @@ class Player(Sprite):
                 self.current_index = 0
             self.animation_counter = 0
 
-    def update(self):
+    def ammend_collisions(self, future_rect: pygame.Rect):
+        if future_rect.x < WORLD_LEFT:
+            future_rect.x = WORLD_LEFT
+        if future_rect.right > WORLD_RIGHT:
+            future_rect.right = WORLD_RIGHT
+        if future_rect.bottom > WORLD_BOTTOM:
+            future_rect.bottom = WORLD_BOTTOM
 
+    def update(self):
         # move towards mouse
         camera = self.manager.get("camera")
         dv: pygame.Vector2 = camera.screen_to_world(pygame.mouse.get_pos()) - self.position
 
-        if pygame.mouse.get_pressed()[0] and self.rect.centery >= 0:
+        if pygame.mouse.get_pressed()[0] and self.rect.centery >= 0 and self.time_since_in_air >= 5:
             self.update_animations()
             dv.scale_to_length(self.speed)
             self.velocity += dv
@@ -102,6 +117,11 @@ class Player(Sprite):
         now_in_water = True
         if self.rect.centery < 0:
             now_in_water = False
+            self.time_since_in_air = 0
+
+        self.time_since_in_air += 1
+        if self.time_since_in_air > 1000:
+            self.time_since_in_air = 1000
 
         # when entering water
         if now_in_water and not self.in_water:
@@ -118,13 +138,7 @@ class Player(Sprite):
             # apply drag only in water
             self.velocity *= 0.95
 
-        # when going out of water
-        if not now_in_water and self.in_water:
-            if self.velocity.y > 2:
-                self.velocity.y = 0
-
-        self.position += self.velocity
-
+        # remove small values of velocity
         if self.velocity.magnitude() < 0.01:
             self.velocity = pygame.Vector2(0, 0)
 
@@ -138,9 +152,17 @@ class Player(Sprite):
 
         self.image = pygame.transform.rotate(image_used, -math.degrees(self.direction))
 
-        self.rect = self.image.get_rect()
+        new_rect = self.image.get_rect(center = self.position)
+        self.rect.width = new_rect.width
+        self.rect.height = new_rect.height
+
+        self.position.x += self.velocity.x
+        self.rect.centerx = self.position.x
+        self.position.y += self.velocity.y
 
         self.rect.center = self.position
+        self.ammend_collisions(self.rect)
+        self.position = pygame.Vector2(self.rect.center)
 
         self.in_water = now_in_water
 
@@ -157,20 +179,28 @@ class WaterSpring(Sprite):
         self.velocity = 0
         self.force = 0
 
-        self.image = pygame.Surface((4, 4))
-        self.rect = self.image.get_rect(center = position)
-
     def update(self):
         force = -self.extension * self.spring_constant - self.velocity * self.dampening
         self.velocity += force
         self.extension += self.velocity
 
-        self.rect.centery = self.origin + self.extension
+class Card(Sprite):
+    def __init__(self, manager):
+        super().__init__(manager)
+        self.image = pygame.transform.scale_by(pygame.image.load("assets/card.png").convert(), 0.5)
+        self.rect = self.image.get_rect()
+
+        self.player = self.manager.get("player")
+
+    def update(self):
+        if self.rect.colliderect(self.player.rect):
+            self.kill()
 
 class Ocean(Sprite):
     def __init__(self, manager, layer_height: int):
         super().__init__(manager, ["update"])
         self.id = "ocean"
+        self.z_index = -10
 
         self.colour = (0, 0, 0)
         self.layer_height = layer_height
@@ -210,6 +240,11 @@ class Ocean(Sprite):
         self.springs[position] = spring
         self.manager.add(spring)
 
+    def remove_spring(self, position: int):
+        spring = self.springs[position]
+        spring.kill()
+        del self.springs[position]
+
     def add_more_springs(self):
         left_most_point = min(self.springs.keys())
         right_most_point = max(self.springs.keys())
@@ -220,9 +255,7 @@ class Ocean(Sprite):
             left_most_point = pos
 
         while left_most_point < self.player.rect.centerx - SCREEN_SIZE.x:
-            spring = self.springs[left_most_point]
-            spring.kill()
-            del self.springs[left_most_point]
+            self.remove_spring(left_most_point)
             left_most_point += self.wave_interval
         
         while right_most_point < self.player.rect.centerx + SCREEN_SIZE.x:
@@ -231,9 +264,7 @@ class Ocean(Sprite):
             right_most_point = pos
 
         while right_most_point > self.player.rect.centerx + SCREEN_SIZE.x:
-            spring = self.springs[right_most_point]
-            spring.kill()
-            del self.springs[right_most_point]
+            self.remove_spring(right_most_point)
             right_most_point -= self.wave_interval
 
     def splash(self, position: float, speed: float, size: int = 4):
@@ -268,7 +299,7 @@ class Ocean(Sprite):
 
     def render(self, surface):
         covered_rect = pygame.Rect(0, max(self.manager.get("camera").world_to_screen(pygame.Vector2(0, 0)).y + self.target_wave_height, 0), *SCREEN_SIZE)
-        # surface.fill(self.colour, covered_rect)
+        surface.fill(self.colour, covered_rect)
 
         self.draw_waves(surface)
 
@@ -278,6 +309,8 @@ class ObjectManager:
         self.objects = {}
         self.render_group = pygame.sprite.Group()
         self.update_group = pygame.sprite.Group()
+        self.collide_group = pygame.sprite.Group()
+        self.enemy_group = pygame.sprite.Group()
 
     def get(self, key: str):
         return self.objects[key]
@@ -290,6 +323,10 @@ class ObjectManager:
             self.render_group.add(sprite)
         if "update" in sprite.group_keys:
             self.update_group.add(sprite)
+        if "collide" in sprite.group_keys:
+            self.collide_group.add(sprite)
+        if "enemy" in sprite.group_keys:
+            self.enemy_group.add(sprite)
 
         return sprite
     
@@ -297,14 +334,54 @@ class ObjectManager:
         self.objects[key] = obj
         return obj
 
+class Pier(Sprite):
+    def __init__(self, manager: ObjectManager):
+        super().__init__(manager, groups = ["render"])
+        self.id = "pier"
+
+        extra_top = 128
+        self.image = pygame.Surface((SCREEN_SIZE.x, WORLD_BOTTOM + extra_top + SCREEN_SIZE.y))
+        self.rect = self.image.get_rect(top = -extra_top, right = 0)
+
+class Floor(Sprite):
+    def __init__(self, manager: ObjectManager):
+        super().__init__(manager, groups = ["render"])
+        self.id = "floor"
+
+        self.image = pygame.Surface((WORLD_RIGHT - WORLD_LEFT, SCREEN_SIZE.y))
+        self.rect = self.image.get_rect(top = LAYER_HEIGHT * 5, left = 0)
+
 class FishLevel:
-    def __init__(self):
+    def __init__(self, game):
+        self.game = game
         self.manager = ObjectManager()
+        self.manager.add_obj(game, "game")
         self.manager.add_obj(self, "level")
 
-        self.player = self.manager.add(Player(self.manager, SCREEN_SIZE / 2))
+        self.pier = self.manager.add(Pier(self.manager))
+        self.floor = self.manager.add(Floor(self.manager))
+        self.player = self.manager.add(Player(self.manager, (20, -20)))
         self.camera = self.manager.add(Camera(self.manager, self.player))
         self.background = self.manager.add(Ocean(self.manager, LAYER_HEIGHT))
+
+        self.test_card = self.manager.add(Card(self.manager))
+
+        self.debug_mode = False
+
+    def on_key_down(self, key: int):
+        if key == pygame.K_F3:
+            self.debug_mode = not self.debug_mode
+
+    def draw_debug(self, surface: pygame.Surface):
+        fps_text = self.manager.get("game").clock.get_fps()
+        fps_surf = FONT.render(f"{round(fps_text)} fps", True, (255, 255, 255))
+        surface.blit(fps_surf, (0, 0))
+
+        for x, spring in self.background.springs.items():
+            pygame.draw.circle(surface, (0, 0, 0), self.camera.world_to_screen((x, spring.origin + spring.extension)), 2)
+
+        for object in self.manager.render_group:
+            pygame.draw.rect(surface, (0, 0, 255), (*self.camera.world_to_screen(object.rect.topleft), *object.rect.size), width = 1)
 
     def update(self):
         self.manager.update_group.update()
@@ -313,33 +390,37 @@ class FishLevel:
         surface.fill((197, 240, 251))
         self.background.render(surface)
         self.camera.render(surface, self.manager.render_group)
+        if self.debug_mode:
+            self.draw_debug(surface)
 
-def main():
-    clock = pygame.time.Clock()
+class Game:
+    def __init__(self):
+        self.window = pygame.display.set_mode(SCREEN_SIZE)
+        self.clock = pygame.time.Clock()
 
-    pygame.display.set_caption("Fish Goes Fish Go Fish Fishing")
-    pygame.display.set_icon(pygame.image.load("assets/icon.png"))
+        pygame.display.set_caption("Fish Goes Fish Go Fish Fishing")
+        pygame.display.set_icon(pygame.image.load("assets/icon.png"))
 
-    running = True
+        self.level = FishLevel(self)
+        self.running = True
 
-    test_level = FishLevel()
+    def run(self):
+        while self.running:
+            self.clock.tick(FPS)
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    self.running = False
+                if event.type == pygame.KEYDOWN:
+                    self.level.on_key_down(event.key)
 
-    while running:
-        clock.tick(FPS)
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
+            self.window.fill((0, 0, 0))
 
-        window.fill((0, 0, 0))
+            self.level.update()
+            self.level.render(self.window)
 
-        test_level.update()
-        test_level.render(window)
+            pygame.display.update()
 
-        pygame.display.update()
-
-        # print(clock.get_fps())
-
-    pygame.quit()
+        pygame.quit()
 
 if __name__ == "__main__":
-    main()
+    Game().run()
