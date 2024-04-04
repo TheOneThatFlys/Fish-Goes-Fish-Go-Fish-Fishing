@@ -17,7 +17,6 @@ FPS = 60
 LAYER_HEIGHT = SCREEN_SIZE.y * 2
 HALF_PI = math.pi / 2
 ANIMATION_TIME = 10
-FONT = pygame.font.Font(None)
 
 WORLD_LEFT = 0
 WORLD_RIGHT = LAYER_HEIGHT * 10
@@ -180,7 +179,6 @@ class Player(Sprite):
         self.rect = self.image.get_frect(center = self.rect.center)
 
         self.rect.center += self.velocity
-        print(self.rect.center)
         self.ammend_collisions(self.rect)
         self.in_water = now_in_water
 
@@ -205,17 +203,12 @@ class WaterSpring(Sprite):
 class Card(Sprite):
     def __init__(self, manager: ObjectManager, position: Vec2, suit: int, value: int):
         super().__init__(manager)
+        self.image = self.manager.get("card-factory").get_image(suit, value)
+        self.rect = self.image.get_rect(center = position)
         self.suit = suit
         self.value = value
-        self.image = self.create_card_image(suit, value)
-        self.rect = self.image.get_rect(center = position)
 
         self.player = self.manager.get("player")
-
-    def create_card_image(self, suit: int, value: int) -> pygame.Surface:
-        surf = pygame.Surface((50, 72), pygame.SRCALPHA)
-        surf.fill((255, 255, 255))
-        return surf
 
     def update(self):
         if self.rect.colliderect(self.player.rect):
@@ -223,14 +216,44 @@ class Card(Sprite):
 
 class CardFactory:
     def __init__(self, manager: ObjectManager):
-        self.id = "asdpl"
         self.manager = manager
 
         self.suits = []
-        self.values = []
+        self.cards = []
 
-    def get_image(self, suit: int, value: int):
-        pass
+        self.value_to_string = [None, "A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"]
+        self.font = pygame.font.SysFont("Trebuchet MS", 16, bold = True)
+
+        self.suits.append(pygame.image.load("assets/fimonsh.png").convert_alpha())
+        self.suits.append(pygame.image.load("assets/fearsh.png").convert_alpha())
+        self.suits.append(pygame.image.load("assets/floversh.png").convert_alpha())
+        self.suits.append(pygame.image.load("assets/fladesh.png").convert_alpha())
+
+        for i in range(52):
+            self.cards.append(self.create_card_image(i // 13, i % 13 + 1))
+
+    def create_card_image(self, suit: int, value: int) -> pygame.Surface:
+        surf = pygame.Surface((50, 72), pygame.SRCALPHA)
+        rect = surf.get_rect()
+        pygame.draw.rect(surf, (255, 255, 255), rect, border_radius = 4)
+        pygame.draw.rect(surf, (200, 200, 200), rect, width = 2, border_radius = 4)
+
+        text_colour = (166, 16, 5) if suit < 2 else (13, 38, 68)
+
+        text = self.font.render(self.value_to_string[value], True, text_colour)
+        text_rect = text.get_rect(center = (10, 8))
+
+        icon = pygame.transform.smoothscale_by(self.suits[suit], 0.5)
+        little_icon = pygame.transform.smoothscale_by(self.suits[suit], 0.17)
+        
+        surf.blit(icon, icon.get_rect(centerx = rect.centerx, centery = rect.centery + 10))
+        surf.blit(little_icon, little_icon.get_rect(centery = 10, centerx = 40))
+        surf.blit(text, text_rect)
+
+        return surf
+    
+    def get_image(self, suit, value) -> pygame.Surface:
+        return self.cards[suit * 13 + value - 1]
 
 class Ocean(Sprite):
     def __init__(self, manager, layer_height: int):
@@ -416,6 +439,8 @@ class FishLevel:
         self.manager.add_obj(game, "game")
         self.manager.add_obj(self, "level")
 
+        self.manager.add_obj(CardFactory(self.manager), "card-factory")
+
         self.wall_left = self.manager.add(WallLeft(self.manager))
         self.wall_right = self.manager.add(WallRight(self.manager))
         self.floor = self.manager.add(Floor(self.manager))
@@ -424,12 +449,13 @@ class FishLevel:
         self.background = self.manager.add(Ocean(self.manager, LAYER_HEIGHT))
 
         self.debug_mode = False
+        self.debug_font = pygame.font.SysFont("Trebuchet MS", 20, False)
         self.add_cards()
 
     def add_cards(self, n: int = 52):
         for i in range(n):
             suit = i // 13
-            value = i % 13
+            value = i % 13 + 1
             # pos = (random.randrange(WORLD_LEFT + 50, WORLD_RIGHT - 50), random.randrange(-500, WORLD_BOTTOM))
             pos = (suit * 200), value * 200
             self.manager.add(Card(self.manager, pos, suit, value))
@@ -440,7 +466,7 @@ class FishLevel:
 
     def draw_debug(self, surface: pygame.Surface):
         fps_text = self.manager.get("game").clock.get_fps()
-        fps_surf = FONT.render(f"{round(fps_text)} fps", True, (255, 255, 255))
+        fps_surf = self.debug_font.render(f"{round(fps_text)} fps", True, (255, 255, 255))
         surface.blit(fps_surf, (0, 0))
 
         for x, spring in self.background.springs.items():
