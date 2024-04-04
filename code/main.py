@@ -20,11 +20,27 @@ ANIMATION_TIME = 10
 FONT = pygame.font.Font(None)
 
 WORLD_LEFT = 0
-WORLD_RIGHT = LAYER_HEIGHT * 5
+WORLD_RIGHT = LAYER_HEIGHT * 10
 WORLD_BOTTOM = LAYER_HEIGHT * 5
 
-def lerp(start, end, a):
+COLOUR_BEACH = (193, 149, 75)
+COLOUR_BORDER = (154, 110, 39)
+
+def lerp(start: float, end: float, a: float):
     return (1 - a) * start + a * end
+
+def lerp_colour(start: Colour, end: Colour, a: float):
+    return (lerp(start[0], end[0], a), lerp(start[1], end[1], a), lerp(start[2], end[2], a))
+
+def draw_gradient(surface: pygame.Surface, start_colour: Colour, end_colour: Colour) -> pygame.Surface:
+    """Draw vertical gradient onto surface. Modifies original surface."""
+    width, height = surface.get_size()
+    for i in range(height):
+        t = i / height
+        colour = lerp_colour(start_colour, end_colour, t)
+
+        pygame.draw.line(surface, colour, (0, i), (width, i))
+    return surface
 
 class Sprite(pygame.sprite.Sprite):
     def __init__(self, manager: ObjectManager, groups: list[Group] = ["render", "update"]):
@@ -76,8 +92,7 @@ class Player(Sprite):
             self.animation_frames.append(pygame.transform.scale_by(pygame.image.load(f"assets/swordfish_{i}.png").convert_alpha(), 0.25))
 
         self.image = self.animation_frames[0]
-        self.rect = self.image.get_rect(bottom = self.manager.get("pier").rect.top, left = 0)
-        self.position = pygame.Vector2(self.rect.center)
+        self.rect = self.image.get_frect(bottom = self.manager.get("left-wall").rect.top, left = 0)
         self.direction = 0
 
         self.speed = 1.5
@@ -86,6 +101,11 @@ class Player(Sprite):
 
         self.in_water = self.rect.centery > 0
         self.time_since_in_air = 0 if self.in_water else 100
+
+        self.splash_sound = pygame.mixer.Sound("assets/splash.mp3")
+        self.small_splash_sound = pygame.mixer.Sound("assets/small_splash.mp3")
+        self.splash_sound.set_volume(0.3)
+        self.small_splash_sound.set_volume(0.3)
 
     def update_animations(self):
         self.animation_counter += 1
@@ -106,12 +126,14 @@ class Player(Sprite):
     def update(self):
         # move towards mouse
         camera = self.manager.get("camera")
-        dv: pygame.Vector2 = camera.screen_to_world(pygame.mouse.get_pos()) - self.position
+        dv: pygame.Vector2 = camera.screen_to_world(pygame.mouse.get_pos()) - self.rect.center
 
         if pygame.mouse.get_pressed()[0] and self.rect.centery >= 0 and self.time_since_in_air >= 5:
             self.update_animations()
-            dv.scale_to_length(self.speed)
-            self.velocity += dv
+            if dv.magnitude() > 5:
+                mvm = dv.copy()
+                mvm.scale_to_length(self.speed)
+                self.velocity += mvm
 
         # check for in water
         now_in_water = True
@@ -126,6 +148,10 @@ class Player(Sprite):
         # when entering water
         if now_in_water and not self.in_water:
             self.manager.get("ocean").splash(self.rect.centerx, lerp(0, 10, min(abs(self.velocity.y), 30) / 30))
+            if abs(self.velocity.y) > 10:
+                self.splash_sound.play()
+            elif abs(self.velocity.y) > 2:
+                self.small_splash_sound.play()
         
         # when exiting water
         if not now_in_water and self.in_water:
@@ -139,7 +165,7 @@ class Player(Sprite):
             self.velocity *= 0.95
 
         # remove small values of velocity
-        if self.velocity.magnitude() < 0.01:
+        if self.velocity.magnitude() < 0.1:
             self.velocity = pygame.Vector2(0, 0)
 
         # look towards
@@ -151,19 +177,11 @@ class Player(Sprite):
             image_used = pygame.transform.flip(image_used, False, True)
 
         self.image = pygame.transform.rotate(image_used, -math.degrees(self.direction))
+        self.rect = self.image.get_frect(center = self.rect.center)
 
-        new_rect = self.image.get_rect(center = self.position)
-        self.rect.width = new_rect.width
-        self.rect.height = new_rect.height
-
-        self.position.x += self.velocity.x
-        self.rect.centerx = self.position.x
-        self.position.y += self.velocity.y
-
-        self.rect.center = self.position
+        self.rect.center += self.velocity
+        print(self.rect.center)
         self.ammend_collisions(self.rect)
-        self.position = pygame.Vector2(self.rect.center)
-
         self.in_water = now_in_water
 
 class WaterSpring(Sprite):
@@ -185,16 +203,34 @@ class WaterSpring(Sprite):
         self.extension += self.velocity
 
 class Card(Sprite):
-    def __init__(self, manager):
+    def __init__(self, manager: ObjectManager, position: Vec2, suit: int, value: int):
         super().__init__(manager)
-        self.image = pygame.transform.scale_by(pygame.image.load("assets/card.png").convert(), 0.5)
-        self.rect = self.image.get_rect()
+        self.suit = suit
+        self.value = value
+        self.image = self.create_card_image(suit, value)
+        self.rect = self.image.get_rect(center = position)
 
         self.player = self.manager.get("player")
+
+    def create_card_image(self, suit: int, value: int) -> pygame.Surface:
+        surf = pygame.Surface((50, 72), pygame.SRCALPHA)
+        surf.fill((255, 255, 255))
+        return surf
 
     def update(self):
         if self.rect.colliderect(self.player.rect):
             self.kill()
+
+class CardFactory:
+    def __init__(self, manager: ObjectManager):
+        self.id = "asdpl"
+        self.manager = manager
+
+        self.suits = []
+        self.values = []
+
+    def get_image(self, suit: int, value: int):
+        pass
 
 class Ocean(Sprite):
     def __init__(self, manager, layer_height: int):
@@ -334,22 +370,44 @@ class ObjectManager:
         self.objects[key] = obj
         return obj
 
-class Pier(Sprite):
+class WallLeft(Sprite):
     def __init__(self, manager: ObjectManager):
         super().__init__(manager, groups = ["render"])
-        self.id = "pier"
+        self.id = "left-wall"
 
-        extra_top = 128
-        self.image = pygame.Surface((SCREEN_SIZE.x, WORLD_BOTTOM + extra_top + SCREEN_SIZE.y))
-        self.rect = self.image.get_rect(top = -extra_top, right = 0)
+        self.image = pygame.Surface((SCREEN_SIZE.x, WORLD_BOTTOM + SCREEN_SIZE.y), pygame.SRCALPHA)
+        self.rect = self.image.get_rect(top = 0, right = 0)
+        self.image.fill(COLOUR_BORDER)
+
+        beach = pygame.Surface((SCREEN_SIZE.x, SCREEN_SIZE.y))
+        draw_gradient(beach, COLOUR_BEACH, COLOUR_BORDER)
+
+        self.image.blit(beach, (0, 0))
+
+        beach_mask = pygame.Surface(self.image.get_size(), pygame.SRCALPHA)
+        pygame.draw.polygon(beach_mask, (255, 255, 255), [(0, 0), (self.image.get_width(), 0), (self.image.get_width(), 64)])
+        beach_mask = pygame.mask.from_surface(beach_mask)
+        self.image = beach_mask.to_surface(unsetsurface = self.image, setcolor = None)
+
+class WallRight(Sprite):
+    def __init__(self, manager: ObjectManager):
+        super().__init__(manager, ["render"])
+        self.id = "right-wall"
+        border_tile = pygame.image.load("assets/border.png").convert_alpha()
+        extra_stuff = 1024
+        self.image = pygame.Surface((border_tile.get_width(), WORLD_BOTTOM + extra_stuff), pygame.SRCALPHA)
+        for i in range(0, self.image.get_height(), border_tile.get_height()):
+            self.image.blit(border_tile, (0, i))
+        self.rect = self.image.get_rect(left = WORLD_RIGHT, top = -extra_stuff)
 
 class Floor(Sprite):
     def __init__(self, manager: ObjectManager):
         super().__init__(manager, groups = ["render"])
         self.id = "floor"
 
-        self.image = pygame.Surface((WORLD_RIGHT - WORLD_LEFT, SCREEN_SIZE.y))
+        self.image = pygame.Surface((WORLD_RIGHT - WORLD_LEFT + LAYER_HEIGHT * 2, SCREEN_SIZE.y))
         self.rect = self.image.get_rect(top = LAYER_HEIGHT * 5, left = 0)
+        self.image.fill(COLOUR_BORDER)
 
 class FishLevel:
     def __init__(self, game):
@@ -358,15 +416,23 @@ class FishLevel:
         self.manager.add_obj(game, "game")
         self.manager.add_obj(self, "level")
 
-        self.pier = self.manager.add(Pier(self.manager))
+        self.wall_left = self.manager.add(WallLeft(self.manager))
+        self.wall_right = self.manager.add(WallRight(self.manager))
         self.floor = self.manager.add(Floor(self.manager))
         self.player = self.manager.add(Player(self.manager, (20, -20)))
         self.camera = self.manager.add(Camera(self.manager, self.player))
         self.background = self.manager.add(Ocean(self.manager, LAYER_HEIGHT))
 
-        self.test_card = self.manager.add(Card(self.manager))
-
         self.debug_mode = False
+        self.add_cards()
+
+    def add_cards(self, n: int = 52):
+        for i in range(n):
+            suit = i // 13
+            value = i % 13
+            # pos = (random.randrange(WORLD_LEFT + 50, WORLD_RIGHT - 50), random.randrange(-500, WORLD_BOTTOM))
+            pos = (suit * 200), value * 200
+            self.manager.add(Card(self.manager, pos, suit, value))
 
     def on_key_down(self, key: int):
         if key == pygame.K_F3:
