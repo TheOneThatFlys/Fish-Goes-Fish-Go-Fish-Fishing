@@ -1,10 +1,17 @@
+# Fish Goes Fish Go Fish Fishing
+# Code is pretty spaghetti, blame gamejam
+# Should have seperated this into seperate files...
+
 from __future__ import annotations
 
 import math, time, os, random
-import pygame
-from typing import TypeVar, Literal, get_args
 
+os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "yeah bro"
+import pygame
+import pygame.freetype
 import pygame.gfxdraw
+
+from typing import TypeVar, Literal, Callable, Optional, get_args
 
 pygame.init()
 
@@ -26,6 +33,9 @@ WORLD_BOTTOM = LAYER_HEIGHT * 5
 
 COLOUR_BEACH = (193, 149, 75)
 COLOUR_BORDER = (154, 110, 39)
+
+COLOUR_DARK_DARK = (32, 26, 35)
+COLOUR_LIGHT_DARK = (46, 37, 50)
 
 FISH_SIM_CENTER_FACTOR = 0.003
 FISH_SIM_AVOID_FACTOR = 0.005
@@ -76,8 +86,9 @@ class Manager:
         for string in get_args(Group):
             self.groups[string] = pygame.sprite.Group()
 
-        self.images = {}
-        self.sounds = {}
+        self.images: dict[str, pygame.Surface] = {}
+        self.sounds: dict[str, pygame.mixer.Sound] = {}
+        self.fonts: dict[str, pygame.freetype.Font] = {}
 
     def load(self, path_to_assets: str):
         for root, dirnames, filenames in os.walk(path_to_assets):
@@ -89,12 +100,18 @@ class Manager:
                 elif filename.endswith(".mp3"):
                     self.sounds[filename.removesuffix(".mp3")] = pygame.mixer.Sound(full_path)
 
+                elif filename.endswith(".ttf"):
+                    self.fonts[filename.removesuffix(".ttf")] = pygame.freetype.Font(full_path)
+
     def get_image(self, key: str) -> pygame.Surface:
         return self.images[key]
     
     def get_sound(self, key: str) -> pygame.mixer.Sound:
         return self.sounds[key]
     
+    def get_font(self, key: str = "stone_age") -> pygame.freetype.Font:
+        return self.fonts[key]
+
     def play_sound(self, key: str, relative_volume: float = 1):
         s = self.get_sound(key)
         s.set_volume(relative_volume)
@@ -126,9 +143,13 @@ class Sprite(pygame.sprite.Sprite):
         self.z_index = 0
 
 class TextBox(Sprite):
-    def __init__(self, manager: Manager, text: str, font_size: int = 20, colour: Colour = (255, 255, 255), **rect_args):
+    def __init__(self, manager: Manager, text: str, font_size: int = 20, colour: Colour = (255, 255, 255), font: Optional[pygame.font.Font] = None, **rect_args):
         super().__init__(manager, groups = ["gui", "update"])
-        self.font = pygame.font.SysFont("Trebuchet MS", font_size)
+        if font:
+            self.font = font
+        else:
+            self.font = pygame.font.SysFont("Trebuchet MS", font_size)
+
         self.text = text
         self.font_size = font_size
         self.colour = colour
@@ -143,6 +164,39 @@ class TextBox(Sprite):
 
     def update(self):
         pass
+
+class Button(Sprite):
+    def __init__(self, manager: Manager, image: pygame.Surface, hover_image: Optional[pygame.Surface] = None, click_func: Callable = None, click_args: list = [], **rect_args):
+        super().__init__(manager, ["gui", "update"])
+
+        self.normal_image = image
+        self.hover_image = hover_image if hover_image else image
+
+        self.image = self.normal_image
+        self.rect = self.image.get_rect(**rect_args)
+
+        self.click_func = click_func if click_func else lambda: 0
+        self.click_args = click_args
+
+        self.active = True
+
+    def on_mouse_down(self, button: int, position: Vec2):
+        if self.rect.collidepoint(position):
+            self.click_func(*self.click_args)
+
+    def activate(self):
+        self.active = True
+
+    def deactivate(self):
+        self.active = False
+
+    def update(self):
+        if not self.active: return
+        mouse_pos = pygame.mouse.get_pos()
+        if self.rect.collidepoint(mouse_pos):
+            self.image = self.hover_image
+        else:
+            self.image = self.normal_image
 
 class Player(Sprite):
     def __init__(self, manager: Manager, initial_velocity: Vec2 = (0, 0)):
@@ -356,15 +410,15 @@ class CardFactory:
 
         text_colour = (166, 16, 5) if suit < 2 else (13, 38, 68)
 
-        text = self.font.render(self.value_to_string[value], True, text_colour)
-        text_rect = text.get_rect(center = (10, 8))
+        text_surf, text_rect = self.manager.get_font().render(self.value_to_string[value], text_colour, size = 16)
+        text_rect.center = (10, 8)
 
         icon = pygame.transform.smoothscale_by(self.suits[suit], 0.5)
         little_icon = pygame.transform.smoothscale_by(self.suits[suit], 0.17)
         
         surf.blit(icon, icon.get_rect(centerx = rect.centerx, centery = rect.centery + 10))
         surf.blit(little_icon, little_icon.get_rect(centery = 10, centerx = 40))
-        surf.blit(text, text_rect)
+        surf.blit(text_surf, text_rect)
 
         return surf
     
@@ -721,8 +775,8 @@ class CardDisplay(Sprite):
                 else:
                     card_image = pygame.Surface(self.card_size, pygame.SRCALPHA)
                     temp_rect = card_image.get_rect()
-                    pygame.draw.rect(card_image, (28, 30, 37), temp_rect, border_radius = 4)
-                    pygame.draw.rect(card_image, (18, 20, 27), temp_rect, width = 2, border_radius = 4)
+                    pygame.draw.rect(card_image, COLOUR_LIGHT_DARK, temp_rect, border_radius = 4)
+                    pygame.draw.rect(card_image, COLOUR_DARK_DARK, temp_rect, width = 2, border_radius = 4)
                 
                 pos = (
                     (value - 1) * (self.card_size[0] + self.horizontal_padding),
@@ -731,46 +785,55 @@ class CardDisplay(Sprite):
 
                 self.image.blit(card_image, pos)
 
-        for value in range(1, 14):
-            collected_suit = True
-            for cards in self.collected_cards:
-                if value not in cards:
-                    collected_suit = False
-                    break
-            if not collected_suit: continue
+        # for value in range(1, 14):
+        #     collected_suit = True
+        #     for cards in self.collected_cards:
+        #         if value not in cards:
+        #             collected_suit = False
+        #             break
+        #     if not collected_suit: continue
 
-            position = (value - 1) * (self.card_size[0] + self.horizontal_padding), 0
-            rect = pygame.Rect(*position, self.card_size[0], self.card_size[1] + 3 * self.vertical_padding)
+        #     position = (value - 1) * (self.card_size[0] + self.horizontal_padding), 0
+        #     rect = pygame.Rect(*position, self.card_size[0], self.card_size[1] + 3 * self.vertical_padding)
 
-            pygame.draw.rect(self.image, (255, 215, 0), rect, width = 2, border_radius = 4)
+        #     pygame.draw.rect(self.image, (255, 215, 0), rect, width = 2, border_radius = 4)
 
     def update(self):
         self.draw_image()
 
-class Timer(TextBox):
-    def __init__(self, manager: Manager):
-        super().__init__(manager, "0.00", 20, (255, 255, 255), centerx = SCREEN_SIZE.x / 2, top = 8)
-        self.start_time = time.time()
-        self.finished = False
+class PauseOverlay(Sprite):
+    def __init__(self, manager: Manager, last_frame: pygame.Surface):
+        super().__init__(manager, [])
+        self.image = pygame.transform.gaussian_blur(last_frame, 4)
+        self.rect = self.image.get_rect()
+
+        title_surf, title_rect = self.manager.get_font().render("Paused", (255, 255, 255), size = 72)
+        title_rect.center = self.rect.center
+
+        subtitle_surf, subtitle_rect = self.manager.get_font().render("Press ESC to resume", (255, 255, 255), size = 24)
+        subtitle_rect.centerx = self.rect.centerx
+        subtitle_rect.top = title_rect.bottom
+
+        self.image.blit(title_surf, title_rect)
+        self.image.blit(subtitle_surf, subtitle_rect)
 
     def update(self):
-        if not self.finished:
-            new_time = time.time()
-            self.set_text(f"{round(new_time - self.start_time, 2)}s")
+        pass
 
-            if len(self.manager.groups["card"]) == 0:
-                self.finished = True
-                self.colour = (255, 215, 0)
-                self.set_text(self.text)
+    def render(self, surface):
+        surface.blit(self.image, (0, 0))
 
 class FishLevel:
     def __init__(self, game: Game):
         self.game = game
+
+        self.game_surface = pygame.Surface(pygame.display.get_surface().get_size())
+
         self.manager = Manager()
         self.manager.load(os.path.join(os.path.curdir, "assets"))
+
         self.manager.add_obj(game, "game")
         self.manager.add_obj(self, "level")
-
         self.manager.add_obj(CardFactory(self.manager), "card-factory")
 
         self.wall_left = self.manager.add(WallLeft(self.manager))
@@ -785,11 +848,16 @@ class FishLevel:
 
         self.compass = self.manager.add(Compass(self.manager))
         self.card_display = self.manager.add(CardDisplay(self.manager))
-        self.timer = self.manager.add(Timer(self.manager))
+
+        self.pause_overlay: PauseOverlay = None
 
         self.debug_mode = False
         self.debug_font = pygame.font.SysFont("Trebuchet MS", 20, False)
         self.add_cards()
+
+        self.finished = False
+
+        self.in_intro = True
 
     def add_cards(self, n: int = 52):
         for i in range(n):
@@ -800,11 +868,22 @@ class FishLevel:
             self.manager.add(Card(self.manager, pos, suit, value))
 
     def on_key_down(self, key: int):
+        if self.in_intro: return
+
+        # DONT FORGET TO DELETE THIS
         if key == pygame.K_F3:
             self.debug_mode = not self.debug_mode
         if key == pygame.K_p:
             for card in self.manager.groups["card"].sprites():
                 card.kill()
+        if key == pygame.K_l:
+            for card in self.manager.groups["card"].sprites():
+                if len(self.manager.groups["card"]) > 1:
+                    card.kill()
+        # --------------------------------- 
+
+        if key == pygame.K_ESCAPE:
+            self.pause_overlay = None if self.pause_overlay else PauseOverlay(self.manager, self.game_surface)
 
     def draw_debug(self, surface: pygame.Surface):
         fps = self.manager.get("game").clock.get_fps()
@@ -825,18 +904,42 @@ class FishLevel:
         pygame.draw.rect(surface, (255, 0, 0), (*self.camera.world_to_screen(self.player.nose_hitbox.topleft), *self.player.nose_hitbox.size), width = 1)
 
     def update(self):
+        if self.in_intro:
+            if pygame.mouse.get_pressed()[0]:
+                self.in_intro = False
+            else:
+                return
+        
+        if self.pause_overlay:
+            self.pause_overlay.update()
+            return
+
+        if not self.finished and len(self.manager.groups["card"]) == 0:
+            self.manager.play_sound("win", 0.7)
+            self.finished = True
+
         self.manager.groups["update"].update()
 
     def render(self, surface: pygame.Surface):
-        surface.fill((197, 240, 251))
-        self.background.render(surface)
-        self.camera.render(surface, self.manager.groups["render"])
+        if self.in_intro:
+            surface.blit(self.manager.get_image("intro_screen"), (0, 0))
+            return
+        
+        if self.pause_overlay:
+            self.pause_overlay.render(surface)
+            return
+
+        self.game_surface.fill((197, 240, 251))
+        self.background.render(self.game_surface)
+        self.camera.render(self.game_surface, self.manager.groups["render"])
 
         for sprite in self.manager.groups["gui"].sprites():
-            surface.blit(sprite.image, sprite.rect)
+            self.game_surface.blit(sprite.image, sprite.rect)
 
         if self.debug_mode:
-            self.draw_debug(surface)
+            self.draw_debug(self.game_surface)
+
+        surface.blit(self.game_surface, (0, 0))
 
 class Camera(Sprite):
     def __init__(self, manager: Manager, target: Sprite):
