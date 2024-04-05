@@ -873,7 +873,7 @@ class Game:
         self.clock = pygame.time.Clock()
 
         pygame.display.set_caption("Fish Goes Fish Go Fish Fishing")
-        pygame.display.set_icon(pygame.image.load("assets/icon.png").convert())
+        pygame.display.set_icon(pygame.image.load(os.path.join(os.curdir, "assets", "image", "icon.png")).convert())
 
         self.level = FishLevel(self)
         self.running = True
