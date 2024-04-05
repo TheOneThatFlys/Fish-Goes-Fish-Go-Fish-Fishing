@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import math
-import time
+import math, time, os, random
 import pygame
-import random
 from typing import TypeVar, Literal, get_args
 
 import pygame.gfxdraw
@@ -28,6 +26,14 @@ WORLD_BOTTOM = LAYER_HEIGHT * 5
 
 COLOUR_BEACH = (193, 149, 75)
 COLOUR_BORDER = (154, 110, 39)
+
+FISH_SIM_CENTER = 0.0003
+FISH_SIM_AVOID = 0.005
+FISH_SIM_MATCH_VEL = 0.04
+FISH_SIM_TURN_FACTOR = 0.5
+FISH_SIM_AVOID_DIST_SQUARED = 35 * 35
+
+FISH_SIM_VISION_SQUARED = 500 * 500
 
 def lerp(start: float, end: float, a: float):
     return (1 - a) * start + a * end
@@ -67,6 +73,30 @@ class Manager:
         self.groups: dict[Group, pygame.sprite.Group] = {}
         for string in get_args(Group):
             self.groups[string] = pygame.sprite.Group()
+
+        self.images = {}
+        self.sounds = {}
+
+    def load(self, path_to_assets: str):
+        for root, dirnames, filenames in os.walk(path_to_assets):
+            for filename in filenames:
+                full_path = os.path.join(root, filename)
+                if filename.endswith(".png"):
+                    self.images[filename.removesuffix(".png")] = pygame.image.load(full_path).convert_alpha()
+
+                elif filename.endswith(".mp3"):
+                    self.sounds[filename.removesuffix(".mp3")] = pygame.mixer.Sound(full_path)
+
+    def get_image(self, key: str) -> pygame.Surface:
+        return self.images[key]
+    
+    def get_sound(self, key: str) -> pygame.mixer.Sound:
+        return self.sounds[key]
+    
+    def play_sound(self, key: str, relative_volume: float = 1):
+        s = self.get_sound(key)
+        s.set_volume(relative_volume)
+        s.play()
 
     def get(self, key: str):
         return self.objects[key]
@@ -122,9 +152,9 @@ class Player(Sprite):
         self.current_index = 0
         self.animation_counter = 0
         for i in range(2):
-            self.original_animation_frames.append(pygame.transform.scale_by(pygame.image.load(f"assets/swordfish_{i}.png").convert_alpha(), 0.25))
+            self.original_animation_frames.append(pygame.transform.scale_by(self.manager.get_image(f"swordfish_{i}"), 0.25))
 
-        self.card_collected_image = pygame.transform.smoothscale_by(pygame.image.load("assets/card_nose.png").convert_alpha(), 0.25)
+        self.card_collected_image = pygame.transform.smoothscale_by(self.manager.get_image("card_nose"), 0.25)
         self.animation_frames = [image.copy() for image in self.original_animation_frames]
         self.collected_card_offsets: list[int] = []
 
@@ -138,9 +168,6 @@ class Player(Sprite):
 
         self.in_water = self.rect.centery > 0
         self.time_since_in_air = 0 if self.in_water else 100
-
-        self.splash_sound = pygame.mixer.Sound("assets/splash.mp3")
-        self.splash_sound.set_volume(0.3)
 
     def collect_card(self):
         if self.collected_card_offsets:
@@ -222,7 +249,7 @@ class Player(Sprite):
         if now_in_water and not self.in_water:
             self.manager.get("ocean").splash(self.rect.centerx, lerp(0, 10, min(abs(self.velocity.y), 30) / 30))
             if abs(self.velocity.y) > 7:
-                self.splash_sound.play()
+                self.manager.play_sound("splash", 0.3)
         
         # when exiting water
         if not now_in_water and self.in_water:
@@ -297,7 +324,7 @@ class Card(Sprite):
             self.kill()
 
     def kill(self):
-        self.manager.get("card-factory").pickup_noise.play()
+        self.manager.play_sound("pickup", 0.8)
         self.manager.get("card-display").collect_card(self.suit, self.value)
         self.manager.get("player").collect_card()
         super().kill()
@@ -312,15 +339,12 @@ class CardFactory:
         self.value_to_string = [None, "A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"]
         self.font = pygame.font.SysFont("Trebuchet MS", 16, bold = True)
 
-        self.suits.append(pygame.image.load("assets/fimonsh.png").convert_alpha())
-        self.suits.append(pygame.image.load("assets/fearsh.png").convert_alpha())
-        self.suits.append(pygame.image.load("assets/floversh.png").convert_alpha())
-        self.suits.append(pygame.image.load("assets/fladesh.png").convert_alpha())
+        fishes = ["fimonsh", "fearsh", "floversh", "fladesh"]
+        for fish in fishes:
+            self.suits.append(self.manager.get_image(fish))
 
         for i in range(52):
             self.cards.append(self.create_card_image(i // 13, i % 13 + 1))
-
-        self.pickup_noise = pygame.mixer.Sound("assets/pickup.mp3")
 
     def create_card_image(self, suit: int, value: int) -> pygame.Surface:
         surf = pygame.Surface((50, 72), pygame.SRCALPHA)
@@ -475,7 +499,7 @@ class WallRight(Sprite):
     def __init__(self, manager: Manager):
         super().__init__(manager, ["render"])
         self.id = "right-wall"
-        border_tile = pygame.image.load("assets/border.png").convert_alpha()
+        border_tile = self.manager.get_image("border")
         extra_stuff = 1024
         self.image = pygame.Surface((border_tile.get_width(), WORLD_BOTTOM + extra_stuff), pygame.SRCALPHA)
         for i in range(0, self.image.get_height(), border_tile.get_height()):
@@ -490,6 +514,102 @@ class Floor(Sprite):
         self.image = pygame.Surface((WORLD_RIGHT - WORLD_LEFT + LAYER_HEIGHT * 2, SCREEN_SIZE.y))
         self.rect = self.image.get_rect(top = LAYER_HEIGHT * 5, left = 0)
         self.image.fill(COLOUR_BORDER)
+
+class FishBoid(Sprite):
+    def __init__(self, manager: Manager, position: Vec2, direction: float, image: pygame.Surface, boid_group: pygame.sprite.Group, bounds: pygame.Rect):
+        super().__init__(manager, ["render"])
+        self.original_image = image
+        self.rect = image.get_frect(center = position)
+
+        self.speed_limit = 10
+        self.velocity: pygame.Vector2 = vector_from_polar(direction, self.speed_limit)
+
+        self.boid_group = boid_group
+        self.bounds = bounds
+
+    def go_towards_center(self, boids: list[FishBoid]):
+        num_boids = 0
+        avg_pos = pygame.Vector2()
+        for boid in boids:
+            avg_pos += boid.rect.center
+            num_boids += 1
+
+        if num_boids:
+            avg_pos = avg_pos / num_boids
+            self.velocity += (avg_pos - self.rect.center) * FISH_SIM_CENTER
+    
+    def avoid_others(self, boids: list[FishBoid]):
+        dv = pygame.Vector2()
+        for boid in boids:
+            if boid == self: continue
+            if (pygame.Vector2(boid.rect.center) - self.rect.center).magnitude_squared() < FISH_SIM_AVOID_DIST_SQUARED:
+                dv += self.rect.center - pygame.Vector2(boid.rect.center)
+
+        self.velocity += dv * FISH_SIM_AVOID
+
+    def match_velocity(self, boids: list[FishBoid]):
+        num_boids = 0
+        avg_vel = pygame.Vector2()
+        for boid in boids:
+            avg_vel += boid.velocity
+            num_boids += 1
+
+        if num_boids:
+            avg_vel = avg_vel / num_boids
+            self.velocity += (avg_vel - self.velocity) * FISH_SIM_MATCH_VEL
+
+    def keep_within_bounds(self):
+        if self.rect.x < self.bounds.x:
+            self.velocity.x += FISH_SIM_TURN_FACTOR
+        if self.rect.right > self.bounds.right:
+            self.velocity.x -= FISH_SIM_TURN_FACTOR
+        if self.rect.y < self.bounds.y:
+            self.velocity.y += FISH_SIM_TURN_FACTOR
+        if self.rect.bottom > self.bounds.bottom:
+            self.velocity.y -= FISH_SIM_TURN_FACTOR
+
+    def update(self, boids: list[FishBoid]):
+        self.go_towards_center(boids)
+        self.avoid_others(boids)
+        self.match_velocity(boids)
+
+        self.velocity.clamp_magnitude_ip(self.speed_limit)
+
+        self.keep_within_bounds()
+
+        self.rect.topleft += self.velocity
+        direction = math.atan2(self.velocity.y, self.velocity.x)
+        self.image = pygame.transform.rotate(self.original_image, -math.degrees(direction))
+
+class BoidManager(Sprite):
+    def __init__(self, manager: Manager, num_fish_per_group: int = 50):
+        super().__init__(manager, ["update"])
+        self.id = "boid-manager"
+
+        self.fish_groups = [pygame.sprite.Group() for _ in range(4)]
+        self.bounding_rect = pygame.Rect(WORLD_LEFT + 10, 100, WORLD_RIGHT - WORLD_LEFT - 10, WORLD_BOTTOM - 110)
+
+        self.create_boids(num_fish_per_group)
+
+    def create_boids(self, num_fish_per_group: int):
+        fish_names = ["fimonsh", "fearsh", "floversh", "fladesh"]
+        for i, group in enumerate(self.fish_groups):
+            
+            img = self.manager.get_image(fish_names[i])
+            img = pygame.transform.rotate(img, -90)
+            img = pygame.transform.smoothscale_by(img, 0.5)
+
+            for _ in range(num_fish_per_group):
+                random_pos = (random.randint(self.bounding_rect.x, self.bounding_rect.right), random.randint(self.bounding_rect.y, self.bounding_rect.bottom))
+                fish = FishBoid(self.manager, random_pos, random.random() * math.pi * 2 - math.pi, img, group, self.bounding_rect)
+                self.manager.add(fish)
+                group.add(fish)
+
+    def update(self):
+        for fish_suit in self.fish_groups:
+            for boid in fish_suit.sprites():
+                boids = [b for b in fish_suit.sprites() if (pygame.Vector2(b.rect.center) - boid.rect.center).magnitude_squared() < FISH_SIM_VISION_SQUARED]
+                boid.update(boids)
 
 class Compass(Sprite):
     def __init__(self, manager: Manager):
@@ -636,6 +756,7 @@ class FishLevel:
     def __init__(self, game):
         self.game = game
         self.manager = Manager()
+        self.manager.load(os.path.join(os.path.curdir, "assets"))
         self.manager.add_obj(game, "game")
         self.manager.add_obj(self, "level")
 
@@ -644,9 +765,13 @@ class FishLevel:
         self.wall_left = self.manager.add(WallLeft(self.manager))
         self.wall_right = self.manager.add(WallRight(self.manager))
         self.floor = self.manager.add(Floor(self.manager))
+
         self.player = self.manager.add(Player(self.manager, (20, -20)))
         self.camera = self.manager.add(Camera(self.manager, self.player))
         self.background = self.manager.add(Ocean(self.manager, LAYER_HEIGHT))
+
+        self.boid_manager = self.manager.add(BoidManager(self.manager))
+
         self.compass = self.manager.add(Compass(self.manager))
         self.card_display = self.manager.add(CardDisplay(self.manager))
         self.timer = self.manager.add(Timer(self.manager))
@@ -737,7 +862,7 @@ class Game:
         self.clock = pygame.time.Clock()
 
         pygame.display.set_caption("Fish Goes Fish Go Fish Fishing")
-        pygame.display.set_icon(pygame.image.load("assets/icon.png"))
+        pygame.display.set_icon(pygame.image.load("assets/icon.png").convert())
 
         self.level = FishLevel(self)
         self.running = True
