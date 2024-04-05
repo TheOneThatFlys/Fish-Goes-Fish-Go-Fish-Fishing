@@ -97,11 +97,15 @@ class Player(Sprite):
         self.id = "player"
         self.z_index = 1
         
-        self.animation_frames = []
+        self.original_animation_frames: list[pygame.Surface] = []
         self.current_index = 0
         self.animation_counter = 0
         for i in range(2):
-            self.animation_frames.append(pygame.transform.scale_by(pygame.image.load(f"assets/swordfish_{i}.png").convert_alpha(), 0.25))
+            self.original_animation_frames.append(pygame.transform.scale_by(pygame.image.load(f"assets/swordfish_{i}.png").convert_alpha(), 0.25))
+
+        self.card_collected_image = pygame.transform.smoothscale_by(pygame.image.load("assets/card_nose.png").convert_alpha(), 0.25)
+        self.animation_frames = [image.copy() for image in self.original_animation_frames]
+        self.collected_card_offsets: list[int] = []
 
         self.image = self.animation_frames[0]
         self.rect = self.image.get_frect(bottom = self.manager.get("left-wall").rect.top, left = 0)
@@ -118,6 +122,40 @@ class Player(Sprite):
         self.small_splash_sound = pygame.mixer.Sound("assets/small_splash.mp3")
         self.splash_sound.set_volume(0.3)
         self.small_splash_sound.set_volume(0.3)
+
+    def collect_card(self):
+        # TODO: random offset
+        self.collected_card_offsets.append(random.randint(-4, 4))
+
+        rects = []
+        for x, offset in enumerate(self.collected_card_offsets):
+            r = self.card_collected_image.get_rect(centery = 45 + offset, x = 165 + x)
+            rects.append(r)
+
+        rects.reverse()
+
+        for i, frame in enumerate(self.original_animation_frames):
+            new_image = frame.copy()
+            for r in rects:
+                new_image.blit(self.card_collected_image, r)
+
+            self.animation_frames[i] = new_image
+
+    def calculate_nose_hitbox(self):
+        self.nose_hitbox = pygame.Rect(0, 0, 1, 1)
+
+        mid_point = pygame.Vector2(self.rect.center)
+        base_offset = vector_from_polar(self.direction, 50)
+        point_offset = vector_from_polar(self.direction, 120)
+
+        p1 = base_offset + mid_point
+        p2 = point_offset + mid_point
+
+        topleft = pygame.Vector2(min(p1.x, p2.x), min(p1.y, p2.y))
+        bottom_right = pygame.Vector2(max(p1.x, p2.x), max(p1.y, p2.y))
+
+        self.nose_hitbox.size = bottom_right - topleft
+        self.nose_hitbox.topleft = topleft
 
     def update_animations(self):
         self.animation_counter += 1
@@ -193,6 +231,7 @@ class Player(Sprite):
 
         self.rect.center += self.velocity
         self.ammend_collisions(self.rect)
+        self.calculate_nose_hitbox()
         self.in_water = now_in_water
 
 class WaterSpring(Sprite):
@@ -221,10 +260,13 @@ class Card(Sprite):
         self.suit = suit
         self.value = value
 
-        self.player = self.manager.get("player")
+        self.player: Player = self.manager.get("player")
 
     def update(self):
-        if self.rect.colliderect(self.player.rect):
+        if self.rect.colliderect(self.player.nose_hitbox):
+            self.manager.get("card-factory").pickup_noise.play()
+            self.manager.get("card-display").collect_card(self.suit, self.value)
+            self.manager.get("player").collect_card()
             self.kill()
 
 class CardFactory:
@@ -244,6 +286,8 @@ class CardFactory:
 
         for i in range(52):
             self.cards.append(self.create_card_image(i // 13, i % 13 + 1))
+
+        self.pickup_noise = pygame.mixer.Sound("assets/pickup.mp3")
 
     def create_card_image(self, suit: int, value: int) -> pygame.Surface:
         surf = pygame.Surface((50, 72), pygame.SRCALPHA)
@@ -265,7 +309,7 @@ class CardFactory:
 
         return surf
     
-    def get_image(self, suit, value) -> pygame.Surface:
+    def get_image(self, suit: int, value: int) -> pygame.Surface:
         return self.cards[suit * 13 + value - 1]
 
 class Ocean(Sprite):
@@ -463,7 +507,11 @@ class Compass(Sprite):
         self.rect = self.image.get_rect(bottomright = (SCREEN_SIZE - (8, 8)))
         self.image.blit(self.bg, (0, 0))
 
-        direction_to_card = self.get_closest_card_direction()
+        if len(self.manager.groups["card"]) == 0:
+            direction_to_card = self.direction + 0.05
+        else:
+            direction_to_card = self.get_closest_card_direction()
+
         self.direction = move_towards_angle(self.direction, direction_to_card, 0.1)
 
         COMPASS_THICKNESS = 4
@@ -474,6 +522,50 @@ class Compass(Sprite):
 
         pygame.gfxdraw.aapolygon(self.image, [left_base, right_base, end_pos], (255, 0, 0))
         pygame.gfxdraw.filled_polygon(self.image, [left_base, right_base, end_pos], (255, 0, 0))
+
+    def update(self):
+        self.draw_image()
+
+class CardDisplay(Sprite):
+    def __init__(self, manager: Manager):
+        super().__init__(manager, ["update", "gui"])
+        self.id = "card-display"
+
+        # suit num points to index, contains list of values collected
+        self.collected_cards: list[list[int]] = [[], [], [], []]
+
+        self.card_size = (25, 36)
+        self.vertical_padding = 10
+        self.horizontal_padding = 8
+
+        self.card_factory: CardFactory = self.manager.get("card-factory")
+
+        self.draw_image()
+
+    def collect_card(self, suit: int, value: int):
+        self.collected_cards[suit].append(value)
+
+    def draw_image(self):
+        self.image = pygame.Surface((self.card_size[0] * 13 + self.horizontal_padding * 12, self.card_size[1] + 3 * self.vertical_padding), pygame.SRCALPHA)
+        self.rect = self.image.get_rect(bottom = SCREEN_SIZE.y - 8, x = 8)
+
+        for suit, cards in enumerate(self.collected_cards):
+            for value in range(1, 14):
+                if value in cards:
+                    card_image = pygame.transform.smoothscale(self.card_factory.get_image(suit, value), self.card_size)
+                else:
+                    card_image = pygame.Surface(self.card_size, pygame.SRCALPHA)
+                    temp_rect = card_image.get_rect()
+                    pygame.draw.rect(card_image, (28, 30, 37), temp_rect, border_radius = 4)
+                    pygame.draw.rect(card_image, (18, 20, 27), temp_rect, width = 2, border_radius = 4)
+                
+                pos = (
+                    (value - 1) * (self.card_size[0] + self.horizontal_padding),
+                    self.vertical_padding * suit
+                )
+
+                self.image.blit(card_image, pos)
+
 
     def update(self):
         self.draw_image()
@@ -494,6 +586,7 @@ class FishLevel:
         self.camera = self.manager.add(Camera(self.manager, self.player))
         self.background = self.manager.add(Ocean(self.manager, LAYER_HEIGHT))
         self.compass = self.manager.add(Compass(self.manager))
+        self.card_display = self.manager.add(CardDisplay(self.manager))
 
         self.debug_mode = False
         self.debug_font = pygame.font.SysFont("Trebuchet MS", 20, False)
@@ -503,7 +596,7 @@ class FishLevel:
         for i in range(n):
             suit = i // 13
             value = i % 13 + 1
-            pos = (random.randint(WORLD_LEFT + 50, WORLD_RIGHT - 50), random.randint(-500, WORLD_BOTTOM))
+            pos = (random.randint(WORLD_LEFT + 100, WORLD_RIGHT - 100), random.randint(-500, WORLD_BOTTOM - 100))
             # pos = (suit * 200), value * 200
             self.manager.add(Card(self.manager, pos, suit, value))
 
@@ -522,6 +615,8 @@ class FishLevel:
         for object in self.manager.groups["render"]:
             pygame.draw.rect(surface, (0, 0, 255), (*self.camera.world_to_screen(object.rect.topleft), *object.rect.size), width = 1)
 
+        pygame.draw.rect(surface, (255, 0, 0), (*self.camera.world_to_screen(self.player.nose_hitbox.topleft), *self.player.nose_hitbox.size), width = 1)
+
     def update(self):
         self.manager.groups["update"].update()
 
@@ -537,7 +632,7 @@ class FishLevel:
             self.draw_debug(surface)
 
 class Camera(Sprite):
-    def __init__(self, manager, target: Sprite):
+    def __init__(self, manager: Manager, target: Sprite):
         super().__init__(manager, ["update"])
         self.id = "camera"
 
