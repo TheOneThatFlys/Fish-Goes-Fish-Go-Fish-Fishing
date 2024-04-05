@@ -161,7 +161,7 @@ class Player(Sprite):
         self.collected_card_offsets: list[int] = []
 
         self.image = self.animation_frames[0]
-        self.rect = self.image.get_frect(bottom = self.manager.get("left-wall").rect.top, left = 0)
+        self.rect = self.image.get_frect(bottom = self.manager.get("wall-left").rect.top, left = 0)
         self.direction = 0
 
         self.speed = 1.5
@@ -285,7 +285,7 @@ class Player(Sprite):
         self.in_water = now_in_water
 
 class WaterSpring(Sprite):
-    def __init__(self, manager, position: Vec2, spring_constant: float, dampening: float):
+    def __init__(self, manager: Manager, position: Vec2, spring_constant: float, dampening: float):
         super().__init__(manager, ["update"])
 
         self.extension = 0
@@ -372,16 +372,16 @@ class CardFactory:
         return self.cards[suit * 13 + value - 1]
 
 class Ocean(Sprite):
-    def __init__(self, manager, layer_height: int):
+    def __init__(self, manager: Manager, layer_height: int):
         super().__init__(manager, ["update"])
         self.id = "ocean"
         self.z_index = -10
 
         self.colour = (0, 0, 0)
-        self.layer_height = layer_height
         
         self.colour_palette = [
             (65, 185, 238),
+            (33, 50, 133),
         ]
 
         self.target_wave_height = 80
@@ -466,9 +466,9 @@ class Ocean(Sprite):
         pygame.draw.lines(surface, (255, 255, 255), False, points[1:-2], width = 3)
 
     def update(self):
-        current_layer = min(max(0, int(self.player.rect.y // LAYER_HEIGHT)), len(self.colour_palette) - 1)
+        t = max((self.player.rect.centery - LAYER_HEIGHT), 0) / (WORLD_BOTTOM - LAYER_HEIGHT)
 
-        self.colour = self.colour_palette[current_layer]
+        self.colour = lerp_colour(self.colour_palette[0], self.colour_palette[1], t)
         self.add_more_springs()
         self.update_springs()
 
@@ -481,7 +481,7 @@ class Ocean(Sprite):
 class WallLeft(Sprite):
     def __init__(self, manager: Manager):
         super().__init__(manager, groups = ["render"])
-        self.id = "left-wall"
+        self.id = "wall-left"
 
         self.image = pygame.Surface((SCREEN_SIZE.x, WORLD_BOTTOM + SCREEN_SIZE.y), pygame.SRCALPHA)
         self.rect = self.image.get_rect(top = 0, right = 0)
@@ -500,13 +500,9 @@ class WallLeft(Sprite):
 class WallRight(Sprite):
     def __init__(self, manager: Manager):
         super().__init__(manager, ["render"])
-        self.id = "right-wall"
-        border_tile = self.manager.get_image("border")
-        extra_stuff = 1024
-        self.image = pygame.Surface((border_tile.get_width(), WORLD_BOTTOM + extra_stuff), pygame.SRCALPHA)
-        for i in range(0, self.image.get_height(), border_tile.get_height()):
-            self.image.blit(border_tile, (0, i))
-        self.rect = self.image.get_rect(left = WORLD_RIGHT, top = -extra_stuff)
+        self.id = "wall-right"
+        self.image = pygame.transform.flip(self.manager.get("wall-left").image, True, False)
+        self.rect = self.image.get_rect(left = WORLD_RIGHT, top = 0)
 
 class Floor(Sprite):
     def __init__(self, manager: Manager):
@@ -746,7 +742,7 @@ class CardDisplay(Sprite):
             position = (value - 1) * (self.card_size[0] + self.horizontal_padding), 0
             rect = pygame.Rect(*position, self.card_size[0], self.card_size[1] + 3 * self.vertical_padding)
 
-            pygame.draw.rect(self.image, (255, 215, 0), rect, width = 1, border_radius = 4)
+            pygame.draw.rect(self.image, (255, 215, 0), rect, width = 2, border_radius = 4)
 
     def update(self):
         self.draw_image()
@@ -768,7 +764,7 @@ class Timer(TextBox):
                 self.set_text(self.text)
 
 class FishLevel:
-    def __init__(self, game):
+    def __init__(self, game: Game):
         self.game = game
         self.manager = Manager()
         self.manager.load(os.path.join(os.path.curdir, "assets"))
