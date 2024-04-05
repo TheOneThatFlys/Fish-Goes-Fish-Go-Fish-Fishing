@@ -27,13 +27,15 @@ WORLD_BOTTOM = LAYER_HEIGHT * 5
 COLOUR_BEACH = (193, 149, 75)
 COLOUR_BORDER = (154, 110, 39)
 
-FISH_SIM_CENTER = 0.0003
-FISH_SIM_AVOID = 0.005
-FISH_SIM_MATCH_VEL = 0.04
-FISH_SIM_TURN_FACTOR = 0.5
-FISH_SIM_AVOID_DIST_SQUARED = 35 * 35
+FISH_SIM_CENTER_FACTOR = 0.003
+FISH_SIM_AVOID_FACTOR = 0.005
+FISH_SIM_MATCH_FACTOR = 0.04
+FISH_SIM_TURN_FACTOR = 0.9
+FISH_SIM_AVOID_PLAYER_FACTOR = 0.05
 
-FISH_SIM_VISION_SQUARED = 500 * 500
+FISH_SIM_AVOID_DIST = 35 * 35
+FISH_SIM_AVOID_PLAYER_DIST = 100 * 100
+FISH_SIM_VISION_DIST = 500 * 500
 
 def lerp(start: float, end: float, a: float):
     return (1 - a) * start + a * end
@@ -527,6 +529,8 @@ class FishBoid(Sprite):
         self.boid_group = boid_group
         self.bounds = bounds
 
+        self.player: Player = self.manager.get("player")
+
     def go_towards_center(self, boids: list[FishBoid]):
         num_boids = 0
         avg_pos = pygame.Vector2()
@@ -536,16 +540,16 @@ class FishBoid(Sprite):
 
         if num_boids:
             avg_pos = avg_pos / num_boids
-            self.velocity += (avg_pos - self.rect.center) * FISH_SIM_CENTER
+            self.velocity += (avg_pos - self.rect.center) * FISH_SIM_CENTER_FACTOR
     
     def avoid_others(self, boids: list[FishBoid]):
         dv = pygame.Vector2()
         for boid in boids:
             if boid == self: continue
-            if (pygame.Vector2(boid.rect.center) - self.rect.center).magnitude_squared() < FISH_SIM_AVOID_DIST_SQUARED:
+            if (pygame.Vector2(boid.rect.center) - self.rect.center).magnitude_squared() < FISH_SIM_AVOID_DIST:
                 dv += self.rect.center - pygame.Vector2(boid.rect.center)
 
-        self.velocity += dv * FISH_SIM_AVOID
+        self.velocity += dv * FISH_SIM_AVOID_FACTOR
 
     def match_velocity(self, boids: list[FishBoid]):
         num_boids = 0
@@ -556,7 +560,7 @@ class FishBoid(Sprite):
 
         if num_boids:
             avg_vel = avg_vel / num_boids
-            self.velocity += (avg_vel - self.velocity) * FISH_SIM_MATCH_VEL
+            self.velocity += (avg_vel - self.velocity) * FISH_SIM_MATCH_FACTOR
 
     def keep_within_bounds(self):
         if self.rect.x < self.bounds.x:
@@ -568,10 +572,16 @@ class FishBoid(Sprite):
         if self.rect.bottom > self.bounds.bottom:
             self.velocity.y -= FISH_SIM_TURN_FACTOR
 
+    def avoid_player(self):
+        dv = (pygame.Vector2(self.player.rect.center) - self.rect.center)
+        if dv.magnitude_squared() < FISH_SIM_AVOID_PLAYER_DIST:
+            self.velocity += -dv * FISH_SIM_AVOID_PLAYER_FACTOR
+
     def update(self, boids: list[FishBoid]):
         self.go_towards_center(boids)
         self.avoid_others(boids)
         self.match_velocity(boids)
+        self.avoid_player()
 
         self.velocity.clamp_magnitude_ip(self.speed_limit)
 
@@ -579,7 +589,11 @@ class FishBoid(Sprite):
 
         self.rect.topleft += self.velocity
         direction = math.atan2(self.velocity.y, self.velocity.x)
-        self.image = pygame.transform.rotate(self.original_image, -math.degrees(direction))
+
+        image_used = self.original_image
+        if direction > HALF_PI or direction < -HALF_PI:
+            image_used = pygame.transform.flip(image_used, False, True)
+        self.image = pygame.transform.rotate(image_used, -math.degrees(direction))
 
 class BoidManager(Sprite):
     def __init__(self, manager: Manager, num_fish_per_group: int = 50):
@@ -587,7 +601,8 @@ class BoidManager(Sprite):
         self.id = "boid-manager"
 
         self.fish_groups = [pygame.sprite.Group() for _ in range(4)]
-        self.bounding_rect = pygame.Rect(WORLD_LEFT + 10, 100, WORLD_RIGHT - WORLD_LEFT - 10, WORLD_BOTTOM - 110)
+        PADDING = 50
+        self.bounding_rect = pygame.Rect(WORLD_LEFT + PADDING, PADDING * 4, WORLD_RIGHT - WORLD_LEFT - PADDING, WORLD_BOTTOM - PADDING * 5)
 
         self.create_boids(num_fish_per_group)
 
@@ -608,7 +623,7 @@ class BoidManager(Sprite):
     def update(self):
         for fish_suit in self.fish_groups:
             for boid in fish_suit.sprites():
-                boids = [b for b in fish_suit.sprites() if (pygame.Vector2(b.rect.center) - boid.rect.center).magnitude_squared() < FISH_SIM_VISION_SQUARED]
+                boids = [b for b in fish_suit.sprites() if (pygame.Vector2(b.rect.center) - boid.rect.center).magnitude_squared() < FISH_SIM_VISION_DIST]
                 boid.update(boids)
 
 class Compass(Sprite):
