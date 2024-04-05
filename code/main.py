@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import time
 import pygame
 import random
 from typing import TypeVar, Literal, get_args
@@ -18,6 +19,7 @@ SCREEN_SIZE = pygame.Vector2(1280, 720)
 FPS = 60
 LAYER_HEIGHT = SCREEN_SIZE.y * 2
 HALF_PI = math.pi / 2
+TWO_PI = math.pi * 2
 ANIMATION_TIME = 10
 
 WORLD_LEFT = 0
@@ -44,7 +46,7 @@ def clamp(value: float, min: float, max: float):
     return value
 
 def move_towards_angle(direction_to_move: float, target_direction: float, max_turn: float) -> float:
-    delta = target_direction - direction_to_move
+    delta = (((target_direction - direction_to_move) + math.pi) % TWO_PI) - math.pi
     delta = clamp(delta, -max_turn, max_turn)
     return direction_to_move + delta
 
@@ -91,6 +93,25 @@ class Sprite(pygame.sprite.Sprite):
         self.id = ""
         self.z_index = 0
 
+class TextBox(Sprite):
+    def __init__(self, manager: Manager, text: str, font_size: int = 20, colour: Colour = (255, 255, 255), **rect_args):
+        super().__init__(manager, groups = ["gui", "update"])
+        self.font = pygame.font.SysFont("Trebuchet MS", font_size)
+        self.text = text
+        self.font_size = font_size
+        self.colour = colour
+        self.rect_args =  rect_args
+
+        self.set_text(text)
+
+    def set_text(self, text: str):
+        self.text = text
+        self.image = self.font.render(text, True, self.colour)
+        self.rect = self.image.get_rect(**self.rect_args)
+
+    def update(self):
+        pass
+
 class Player(Sprite):
     def __init__(self, manager: Manager, initial_velocity: Vec2 = (0, 0)):
         super().__init__(manager)
@@ -119,17 +140,18 @@ class Player(Sprite):
         self.time_since_in_air = 0 if self.in_water else 100
 
         self.splash_sound = pygame.mixer.Sound("assets/splash.mp3")
-        self.small_splash_sound = pygame.mixer.Sound("assets/small_splash.mp3")
         self.splash_sound.set_volume(0.3)
-        self.small_splash_sound.set_volume(0.3)
 
     def collect_card(self):
-        # TODO: random offset
-        self.collected_card_offsets.append(random.randint(-4, 4))
+        if self.collected_card_offsets:
+            self.collected_card_offsets.append(random.randint(-4, 4))
+        else:
+            # make sure first card is always no offset
+            self.collected_card_offsets.append(0)
 
         rects = []
         for x, offset in enumerate(self.collected_card_offsets):
-            r = self.card_collected_image.get_rect(centery = 45 + offset, x = 165 + x)
+            r = self.card_collected_image.get_rect(centery = 43 + offset, x = 165 + x)
             rects.append(r)
 
         rects.reverse()
@@ -154,7 +176,8 @@ class Player(Sprite):
         topleft = pygame.Vector2(min(p1.x, p2.x), min(p1.y, p2.y))
         bottom_right = pygame.Vector2(max(p1.x, p2.x), max(p1.y, p2.y))
 
-        self.nose_hitbox.size = bottom_right - topleft
+        self.nose_hitbox.width = max(bottom_right.x - topleft.x, 1)
+        self.nose_hitbox.height = max(bottom_right.y - topleft.y, 1)
         self.nose_hitbox.topleft = topleft
 
     def update_animations(self):
@@ -198,10 +221,8 @@ class Player(Sprite):
         # when entering water
         if now_in_water and not self.in_water:
             self.manager.get("ocean").splash(self.rect.centerx, lerp(0, 10, min(abs(self.velocity.y), 30) / 30))
-            if abs(self.velocity.y) > 10:
+            if abs(self.velocity.y) > 7:
                 self.splash_sound.play()
-            elif abs(self.velocity.y) > 2:
-                self.small_splash_sound.play()
         
         # when exiting water
         if not now_in_water and self.in_water:
@@ -262,12 +283,24 @@ class Card(Sprite):
 
         self.player: Player = self.manager.get("player")
 
+        self.origin = self.rect.centery
+        self.max_offset = 20
+        self.timer = random.random() * math.pi * 2
+
     def update(self):
+        self.timer += 0.1
+        if self.timer > math.pi * 2:
+            self.timer = 0
+        self.rect.centery = self.origin + math.sin(self.timer) * self.max_offset
+
         if self.rect.colliderect(self.player.nose_hitbox):
-            self.manager.get("card-factory").pickup_noise.play()
-            self.manager.get("card-display").collect_card(self.suit, self.value)
-            self.manager.get("player").collect_card()
             self.kill()
+
+    def kill(self):
+        self.manager.get("card-factory").pickup_noise.play()
+        self.manager.get("card-display").collect_card(self.suit, self.value)
+        self.manager.get("player").collect_card()
+        super().kill()
 
 class CardFactory:
     def __init__(self, manager: Manager):
@@ -473,9 +506,10 @@ class Compass(Sprite):
         surf = pygame.Surface(self.size, pygame.SRCALPHA)
         rect = surf.get_rect(bottomright = (SCREEN_SIZE - (8, 8)))
 
-        radius = rect.width / 2
+        radius = rect.width / 2 - 1
 
-        pygame.draw.circle(surf, (255, 255, 255), (radius, radius), radius, 3)
+        pygame.gfxdraw.circle(surf, int(radius), int(radius), int(radius), (255, 255, 255))
+        pygame.gfxdraw.circle(surf, int(radius), int(radius), int(radius - 1), (255, 255, 255))
 
         steps = 60
         increment = math.pi * 2 / steps
@@ -492,12 +526,12 @@ class Compass(Sprite):
 
     def get_closest_card_direction(self) -> float:
         def __distance_to_player(sprite):
-            return (pygame.Vector2(sprite.rect.center) - self.player.rect.center).magnitude()
+            return (pygame.Vector2(sprite.rect.centerx, sprite.origin) - self.player.rect.center).magnitude()
         
         if len(self.manager.groups["card"]) == 0: return 0
 
         closest_card = min(self.manager.groups["card"], key = __distance_to_player)
-        dv = pygame.Vector2(closest_card.rect.center) - self.player.rect.center
+        dv = pygame.Vector2(closest_card.rect.centerx, closest_card.origin) - self.player.rect.center
         direction = math.atan2(dv.y, dv.x)
 
         return direction
@@ -566,9 +600,37 @@ class CardDisplay(Sprite):
 
                 self.image.blit(card_image, pos)
 
+        for value in range(1, 14):
+            collected_suit = True
+            for cards in self.collected_cards:
+                if value not in cards:
+                    collected_suit = False
+                    break
+            if not collected_suit: continue
+
+            position = (value - 1) * (self.card_size[0] + self.horizontal_padding), 0
+            rect = pygame.Rect(*position, self.card_size[0], self.card_size[1] + 3 * self.vertical_padding)
+
+            pygame.draw.rect(self.image, (255, 215, 0), rect, width = 1, border_radius = 4)
 
     def update(self):
         self.draw_image()
+
+class Timer(TextBox):
+    def __init__(self, manager: Manager):
+        super().__init__(manager, "0.00", 20, (255, 255, 255), centerx = SCREEN_SIZE.x / 2, top = 8)
+        self.start_time = time.time()
+        self.finished = False
+
+    def update(self):
+        if not self.finished:
+            new_time = time.time()
+            self.set_text(f"{round(new_time - self.start_time, 2)}s")
+
+            if len(self.manager.groups["card"]) == 0:
+                self.finished = True
+                self.colour = (255, 215, 0)
+                self.set_text(self.text)
 
 class FishLevel:
     def __init__(self, game):
@@ -587,6 +649,7 @@ class FishLevel:
         self.background = self.manager.add(Ocean(self.manager, LAYER_HEIGHT))
         self.compass = self.manager.add(Compass(self.manager))
         self.card_display = self.manager.add(CardDisplay(self.manager))
+        self.timer = self.manager.add(Timer(self.manager))
 
         self.debug_mode = False
         self.debug_font = pygame.font.SysFont("Trebuchet MS", 20, False)
@@ -603,11 +666,19 @@ class FishLevel:
     def on_key_down(self, key: int):
         if key == pygame.K_F3:
             self.debug_mode = not self.debug_mode
+        if key == pygame.K_p:
+            for card in self.manager.groups["card"].sprites():
+                card.kill()
 
     def draw_debug(self, surface: pygame.Surface):
-        fps_text = self.manager.get("game").clock.get_fps()
-        fps_surf = self.debug_font.render(f"{round(fps_text)} fps", True, (255, 255, 255))
+        fps = self.manager.get("game").clock.get_fps()
+        fps_surf = self.debug_font.render(f"{round(fps)} fps", True, (255, 255, 255))
+        fps_rect = fps_surf.get_rect()
         surface.blit(fps_surf, (0, 0))
+
+        pos_surf = self.debug_font.render(f"{self.player.rect.centerx}, {self.player.rect.centery}", True, (255, 255, 255))
+        pos_rect = pos_surf.get_rect(top = fps_rect.bottom)
+        surface.blit(pos_surf, pos_rect)
 
         for x, spring in self.background.springs.items():
             pygame.draw.circle(surface, (0, 0, 0), self.camera.world_to_screen((x, spring.origin + spring.extension)), 2)
