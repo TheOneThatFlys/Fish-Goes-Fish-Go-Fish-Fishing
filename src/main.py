@@ -978,18 +978,6 @@ class FishLevel:
         if key == pygame.K_ESCAPE:
             self.screen_override = PauseOverlay(self.manager, self.game_surface)
 
-        # DONT FORGET TO DELETE THIS
-        if key == pygame.K_F3:
-            self.debug_mode = not self.debug_mode
-        if key == pygame.K_p:
-            for card in self.manager.groups["card"].sprites():
-                card.kill()
-        if key == pygame.K_l:
-            for card in self.manager.groups["card"].sprites():
-                if len(self.manager.groups["card"]) > 1:
-                    card.kill()
-        # --------------------------------- 
-
     def on_mouse_down(self, button: int, position: Vec2):
         if self.screen_override:
             self.screen_override.on_mouse_down(button, position)
