@@ -17,7 +17,7 @@ pygame.init()
 
 Vec2 = tuple[float, float]
 Colour = tuple[int, int, int]
-Group = Literal["render", "update", "card", "fish", "gui"]
+Group = Literal["render", "update", "card", "gui"]
 Axis = Literal["x", "y"]
 
 SCREEN_SIZE = pygame.Vector2(1280, 720)
@@ -809,6 +809,31 @@ class CardDisplay(Sprite):
     def update(self):
         self.draw_image()
 
+class Timer(Sprite):
+    def __init__(self, manager: Manager):
+        super().__init__(manager, ["update", "gui"])
+        self.id = "timer"
+        self.draw_image("0.00")
+
+        self.time = 0
+        self.last_time = time.time()
+
+        self.level: FishLevel = self.manager.get("level")
+
+    def draw_image(self, text: str):
+        self.image, self.rect = self.manager.get_font().render(text, (255, 255, 255), size = 32)
+        self.rect.centerx = SCREEN_SIZE.x / 2
+        self.rect.y = 32
+
+    def update(self):
+        now_time = time.time()
+        dt = now_time - self.last_time
+        self.last_time = now_time
+        if self.level.screen_override == None:
+            self.time += dt
+
+        self.draw_image(str(round(self.time, 2)))
+
 class BlockingOverlay(Sprite):
     def __init__(self, manager: Manager, image: Optional[pygame.Surface] = None):
         super().__init__(manager, [])
@@ -858,14 +883,19 @@ class WinOverlay(BlockingOverlay):
         super().__init__(manager)
 
         self.image = self.manager.get_image("win_screen")
-        
+
+        TEXT_COLOUR_1 = (255, 255, 255)
+        TEXT_COLOUR_2 = (76, 76, 87)
         f = self.manager.get_font()
+        
+        t_image, _ = f.render(f"Completed in {round(self.manager.get('timer').time, 2)}s", TEXT_COLOUR_2, size = 30)
+        self.image.blit(t_image, t_image.get_rect(centerx = SCREEN_SIZE.x / 2, centery = 160))
 
-        p_image, _ = f.render("Play Again", (76, 76, 87), size = 32)
-        q_image, _ = f.render("Quit", (76, 76, 87), size = 32)
+        p_image, _ = f.render("Play Again", TEXT_COLOUR_2, size = 32)
+        q_image, _ = f.render("Quit", TEXT_COLOUR_2, size = 32)
 
-        p_hover, _ = f.render("Play Again", (255, 255, 255), size = 32)
-        q_hover, _ = f.render("Quit", (255, 255, 255), size = 32)
+        p_hover, _ = f.render("Play Again", TEXT_COLOUR_1, size = 32)
+        q_hover, _ = f.render("Quit", TEXT_COLOUR_1, size = 32)
 
         level: FishLevel = self.manager.get("level")
         game: Game = self.manager.get("game")
@@ -912,8 +942,10 @@ class FishLevel:
 
         self.compass = self.manager.add(Compass(self.manager))
         self.card_display = self.manager.add(CardDisplay(self.manager))
+        self.timer = self.manager.add(Timer(self.manager))
 
         self.screen_override: BlockingOverlay | None = BlockingOverlay(self.manager, self.manager.get_image("intro_screen"))
+
         if skip_intro:
             self.screen_override = None
 
@@ -981,6 +1013,7 @@ class FishLevel:
     def update(self):
         if self.screen_override:
             self.screen_override.update()
+            self.timer.update()
             return
 
         if not self.finished and len(self.manager.groups["card"]) == 0:
