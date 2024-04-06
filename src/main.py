@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-import math, time, os, random
+import math, time, os, random, sys
 
 os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "yeah bro"
 import pygame
@@ -46,6 +46,11 @@ FISH_SIM_AVOID_PLAYER_FACTOR = 0.05
 FISH_SIM_AVOID_DIST = 35 * 35
 FISH_SIM_AVOID_PLAYER_DIST = 100 * 100
 FISH_SIM_VISION_DIST = 500 * 500
+
+if getattr(sys, "frozen", None):
+    ASSETS_PATH = "assets"
+else:
+    ASSETS_PATH = os.path.normpath(os.path.join(os.path.curdir, "src", "assets"))
 
 def lerp(start: float, end: float, a: float):
     return (1 - a) * start + a * end
@@ -924,7 +929,7 @@ class FishLevel:
         self.game_surface = pygame.Surface(pygame.display.get_surface().get_size())
 
         self.manager = Manager()
-        self.manager.load(os.path.join(os.path.curdir, "assets"))
+        self.manager.load(ASSETS_PATH)
 
         self.manager.add_obj(game, "game")
         self.manager.add_obj(self, "level")
@@ -1075,7 +1080,7 @@ class Game:
         self.clock = pygame.time.Clock()
 
         pygame.display.set_caption("Fish Goes Fish Go Fish Fishing")
-        pygame.display.set_icon(pygame.image.load(os.path.join(os.curdir, "assets", "image", "icon.png")).convert())
+        pygame.display.set_icon(pygame.image.load(os.path.join(ASSETS_PATH, "image", "icon.png")).convert())
 
         self.level = FishLevel(self)
         self.running = True
