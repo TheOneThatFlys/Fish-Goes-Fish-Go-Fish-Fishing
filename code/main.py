@@ -90,6 +90,9 @@ class Manager:
         self.sounds: dict[str, pygame.mixer.Sound] = {}
         self.fonts: dict[str, pygame.freetype.Font] = {}
 
+        self.cursor_state = pygame.SYSTEM_CURSOR_ARROW
+        self.queued_cursor_state = self.cursor_state
+
     def load(self, path_to_assets: str):
         for root, dirnames, filenames in os.walk(path_to_assets):
             for filename in filenames:
@@ -134,6 +137,14 @@ class Manager:
         self.objects[key] = obj
         return obj
 
+    def queue_cursor(self, cursor: int):
+        self.queued_cursor_state = cursor
+
+    def sync_cursor(self):
+        if self.queued_cursor_state != self.cursor_state:
+            pygame.mouse.set_cursor(self.queued_cursor_state)
+            self.cursor_state = self.queued_cursor_state
+
 class Sprite(pygame.sprite.Sprite):
     def __init__(self, manager: Manager, groups: list[Group] = ["render", "update"]):
         super().__init__()
@@ -166,8 +177,8 @@ class TextBox(Sprite):
         pass
 
 class Button(Sprite):
-    def __init__(self, manager: Manager, image: pygame.Surface, hover_image: Optional[pygame.Surface] = None, click_func: Callable = None, click_args: list = [], **rect_args):
-        super().__init__(manager, ["gui", "update"])
+    def __init__(self, manager: Manager, image: pygame.Surface, hover_image: Optional[pygame.Surface] = None, click_func: Callable[..., None] = None, click_args: list = [], **rect_args):
+        super().__init__(manager, [])
 
         self.normal_image = image
         self.hover_image = hover_image if hover_image else image
@@ -175,7 +186,7 @@ class Button(Sprite):
         self.image = self.normal_image
         self.rect = self.image.get_rect(**rect_args)
 
-        self.click_func = click_func if click_func else lambda: 0
+        self.click_func = click_func if click_func else lambda: None
         self.click_args = click_args
 
         self.active = True
@@ -184,19 +195,16 @@ class Button(Sprite):
         if self.rect.collidepoint(position):
             self.click_func(*self.click_args)
 
-    def activate(self):
-        self.active = True
-
-    def deactivate(self):
-        self.active = False
-
     def update(self):
-        if not self.active: return
         mouse_pos = pygame.mouse.get_pos()
         if self.rect.collidepoint(mouse_pos):
             self.image = self.hover_image
+            self.manager.queue_cursor(pygame.SYSTEM_CURSOR_HAND)
         else:
             self.image = self.normal_image
+
+    def render(self, surface: pygame.Surface):
+        surface.blit(self.image, self.rect)
 
 class Player(Sprite):
     def __init__(self, manager: Manager, initial_velocity: Vec2 = (0, 0)):
@@ -801,9 +809,31 @@ class CardDisplay(Sprite):
     def update(self):
         self.draw_image()
 
-class PauseOverlay(Sprite):
-    def __init__(self, manager: Manager, last_frame: pygame.Surface):
+class BlockingOverlay(Sprite):
+    def __init__(self, manager: Manager, image: Optional[pygame.Surface] = None):
         super().__init__(manager, [])
+        self.image = image if image else pygame.Surface((1, 1))
+
+    def update(self):
+        pass
+
+    def on_key_down(self, key: int):
+        pass
+
+    def on_mouse_down(self, button: int, position: Vec2):
+        self.kill()
+
+    def kill(self):
+        """Remove this overlay"""
+        self.manager.get("level").screen_override = None
+        super().kill()
+
+    def render(self, surface: pygame.Surface):
+        surface.blit(self.image, (0, 0))
+
+class PauseOverlay(BlockingOverlay):
+    def __init__(self, manager: Manager, last_frame: pygame.Surface):
+        super().__init__(manager)
         self.image = pygame.transform.gaussian_blur(last_frame, 4)
         self.rect = self.image.get_rect()
 
@@ -817,11 +847,48 @@ class PauseOverlay(Sprite):
         self.image.blit(title_surf, title_rect)
         self.image.blit(subtitle_surf, subtitle_rect)
 
-    def render(self, surface):
-        surface.blit(self.image, (0, 0))
+    def on_mouse_down(self, button: int, position: Vec2): ... # override default pause behaviour
+
+    def on_key_down(self, key: int):
+        if key == pygame.K_ESCAPE:
+            self.kill()
+
+class WinOverlay(BlockingOverlay):
+    def __init__(self, manager: Manager):
+        super().__init__(manager)
+
+        self.image = self.manager.get_image("win_screen")
+        
+        f = self.manager.get_font()
+
+        p_image, _ = f.render("Play Again", (76, 76, 87), size = 32)
+        q_image, _ = f.render("Quit", (76, 76, 87), size = 32)
+
+        p_hover, _ = f.render("Play Again", (255, 255, 255), size = 32)
+        q_hover, _ = f.render("Quit", (255, 255, 255), size = 32)
+
+        level: FishLevel = self.manager.get("level")
+        game: Game = self.manager.get("game")
+
+        self.play_button = Button(self.manager, image = p_image, hover_image = p_hover, click_func = level.restart, centery = SCREEN_SIZE.y - 120, centerx = SCREEN_SIZE.x / 2)
+        self.quit_button = Button(self.manager, image = q_image, hover_image = q_hover, click_func = game.queue_close, top = self.play_button.rect.bottom + 8, centerx = self.play_button.rect.centerx)
+
+    def on_mouse_down(self, button: int, position: Vec2):
+        self.play_button.on_mouse_down(button, position)
+        self.quit_button.on_mouse_down(button, position)
+
+    def update(self):
+        self.play_button.update()
+        self.quit_button.update()
+
+    def render(self, surface: pygame.Surface):
+        super().render(surface)
+
+        self.play_button.render(surface)
+        self.quit_button.render(surface)
 
 class FishLevel:
-    def __init__(self, game: Game):
+    def __init__(self, game: Game, skip_intro = False):
         self.game = game
 
         self.game_surface = pygame.Surface(pygame.display.get_surface().get_size())
@@ -846,15 +913,17 @@ class FishLevel:
         self.compass = self.manager.add(Compass(self.manager))
         self.card_display = self.manager.add(CardDisplay(self.manager))
 
-        self.pause_overlay: PauseOverlay = None
+        self.screen_override: BlockingOverlay | None = BlockingOverlay(self.manager, self.manager.get_image("intro_screen"))
+        if skip_intro:
+            self.screen_override = None
 
         self.debug_mode = False
         self.debug_font = pygame.font.SysFont("Trebuchet MS", 20, False)
         self.add_cards()
 
         self.finished = False
-
-        self.screen_override: str | None = "intro_screen"
+        self.manager.queue_cursor(pygame.SYSTEM_CURSOR_ARROW)
+        pygame.mouse.set_cursor(pygame.SYSTEM_CURSOR_ARROW)
 
     def add_cards(self, n: int = 52):
         for i in range(n):
@@ -865,7 +934,12 @@ class FishLevel:
             self.manager.add(Card(self.manager, pos, suit, value))
 
     def on_key_down(self, key: int):
-        if self.screen_override: return
+        if self.screen_override:
+            self.screen_override.on_key_down(key)
+            return
+
+        if key == pygame.K_ESCAPE:
+            self.screen_override = PauseOverlay(self.manager, self.game_surface)
 
         # DONT FORGET TO DELETE THIS
         if key == pygame.K_F3:
@@ -879,8 +953,9 @@ class FishLevel:
                     card.kill()
         # --------------------------------- 
 
-        if key == pygame.K_ESCAPE:
-            self.pause_overlay = None if self.pause_overlay else PauseOverlay(self.manager, self.game_surface)
+    def on_mouse_down(self, button: int, position: Vec2):
+        if self.screen_override:
+            self.screen_override.on_mouse_down(button, position)
 
     def draw_debug(self, surface: pygame.Surface):
         fps = self.manager.get("game").clock.get_fps()
@@ -900,30 +975,24 @@ class FishLevel:
 
         pygame.draw.rect(surface, (255, 0, 0), (*self.camera.world_to_screen(self.player.nose_hitbox.topleft), *self.player.nose_hitbox.size), width = 1)
 
+    def restart(self):
+        self.__init__(self.game, True)
+
     def update(self):
         if self.screen_override:
-            if pygame.mouse.get_pressed()[0]:
-                self.screen_override = None
-            else:
-                return
-        
-        if self.pause_overlay:
-            self.pause_overlay.update()
+            self.screen_override.update()
             return
 
         if not self.finished and len(self.manager.groups["card"]) == 0:
             self.manager.play_sound("win", 0.4)
             self.finished = True
+            self.screen_override = WinOverlay(self.manager)
 
         self.manager.groups["update"].update()
 
     def render(self, surface: pygame.Surface):
         if self.screen_override:
-            surface.blit(self.manager.get_image(self.screen_override), (0, 0))
-            return
-        
-        if self.pause_overlay:
-            self.pause_overlay.render(surface)
+            self.screen_override.render(surface)
             return
 
         self.game_surface.fill((197, 240, 251))
@@ -978,19 +1047,28 @@ class Game:
         self.level = FishLevel(self)
         self.running = True
 
+    def queue_close(self):
+        self.running = False
+
     def run(self):
         while self.running:
             self.clock.tick(FPS)
+            self.level.manager.queue_cursor(pygame.SYSTEM_CURSOR_ARROW)
+
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     self.running = False
                 if event.type == pygame.KEYDOWN:
                     self.level.on_key_down(event.key)
+                if event.type == pygame.MOUSEBUTTONDOWN:
+                    self.level.on_mouse_down(event.button, pygame.mouse.get_pos())
 
             self.window.fill((0, 0, 0))
 
             self.level.update()
             self.level.render(self.window)
+
+            self.level.manager.sync_cursor()
 
             pygame.display.update()
 
