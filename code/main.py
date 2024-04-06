@@ -817,9 +817,6 @@ class PauseOverlay(Sprite):
         self.image.blit(title_surf, title_rect)
         self.image.blit(subtitle_surf, subtitle_rect)
 
-    def update(self):
-        pass
-
     def render(self, surface):
         surface.blit(self.image, (0, 0))
 
@@ -857,7 +854,7 @@ class FishLevel:
 
         self.finished = False
 
-        self.in_intro = True
+        self.screen_override: str | None = "intro_screen"
 
     def add_cards(self, n: int = 52):
         for i in range(n):
@@ -868,7 +865,7 @@ class FishLevel:
             self.manager.add(Card(self.manager, pos, suit, value))
 
     def on_key_down(self, key: int):
-        if self.in_intro: return
+        if self.screen_override: return
 
         # DONT FORGET TO DELETE THIS
         if key == pygame.K_F3:
@@ -904,9 +901,9 @@ class FishLevel:
         pygame.draw.rect(surface, (255, 0, 0), (*self.camera.world_to_screen(self.player.nose_hitbox.topleft), *self.player.nose_hitbox.size), width = 1)
 
     def update(self):
-        if self.in_intro:
+        if self.screen_override:
             if pygame.mouse.get_pressed()[0]:
-                self.in_intro = False
+                self.screen_override = None
             else:
                 return
         
@@ -915,14 +912,14 @@ class FishLevel:
             return
 
         if not self.finished and len(self.manager.groups["card"]) == 0:
-            self.manager.play_sound("win", 0.7)
+            self.manager.play_sound("win", 0.4)
             self.finished = True
 
         self.manager.groups["update"].update()
 
     def render(self, surface: pygame.Surface):
-        if self.in_intro:
-            surface.blit(self.manager.get_image("intro_screen"), (0, 0))
+        if self.screen_override:
+            surface.blit(self.manager.get_image(self.screen_override), (0, 0))
             return
         
         if self.pause_overlay:
