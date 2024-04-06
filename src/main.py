@@ -221,7 +221,7 @@ class Player(Sprite):
         self.current_index = 0
         self.animation_counter = 0
         for i in range(2):
-            self.original_animation_frames.append(pygame.transform.scale_by(self.manager.get_image(f"swordfish_{i}"), 0.25))
+            self.original_animation_frames.append(pygame.transform.smoothscale_by(self.manager.get_image(f"swordfish_{i}"), 0.25))
 
         self.card_collected_image = pygame.transform.smoothscale_by(self.manager.get_image("card_nose"), 0.25)
         self.animation_frames = [image.copy() for image in self.original_animation_frames]
@@ -343,7 +343,7 @@ class Player(Sprite):
         if self.direction > HALF_PI or self.direction < -HALF_PI:
             image_used = pygame.transform.flip(image_used, False, True)
 
-        self.image = pygame.transform.rotate(image_used, -math.degrees(self.direction))
+        self.image = pygame.transform.rotozoom(image_used, -math.degrees(self.direction), 1)
         self.rect = self.image.get_frect(center = self.rect.center)
 
         self.rect.center += self.velocity
@@ -635,6 +635,13 @@ class FishBoid(Sprite):
         if self.rect.bottom > self.bounds.bottom:
             self.velocity.y -= FISH_SIM_TURN_FACTOR
 
+        if self.rect.x < WORLD_LEFT:
+            self.rect.x = WORLD_LEFT
+        if self.rect.right > WORLD_RIGHT:
+            self.rect.right = WORLD_RIGHT
+        if self.rect.bottom > WORLD_BOTTOM:
+            self.rect.bottom = WORLD_BOTTOM
+
     def avoid_player(self):
         dv = (pygame.Vector2(self.player.rect.center) - self.rect.center)
         if dv.magnitude_squared() < FISH_SIM_AVOID_PLAYER_DIST:
@@ -648,15 +655,16 @@ class FishBoid(Sprite):
 
         self.velocity.clamp_magnitude_ip(self.speed_limit)
 
-        self.keep_within_bounds()
-
         self.rect.topleft += self.velocity
         direction = math.atan2(self.velocity.y, self.velocity.x)
 
         image_used = self.original_image
         if direction > HALF_PI or direction < -HALF_PI:
             image_used = pygame.transform.flip(image_used, False, True)
-        self.image = pygame.transform.rotate(image_used, -math.degrees(direction))
+        self.image = pygame.transform.rotozoom(image_used, -math.degrees(direction), 1)
+        self.rect = self.image.get_rect(center = self.rect.center)
+
+        self.keep_within_bounds()
 
 class BoidManager(Sprite):
     def __init__(self, manager: Manager, num_fish_per_group: int = 50):
@@ -674,7 +682,7 @@ class BoidManager(Sprite):
         for i, group in enumerate(self.fish_groups):
             
             img = self.manager.get_image(fish_names[i])
-            img = pygame.transform.rotate(img, -90)
+            img = pygame.transform.rotozoom(img, -90, 1)
             img = pygame.transform.smoothscale_by(img, 0.5)
 
             for _ in range(num_fish_per_group):
@@ -883,6 +891,16 @@ class PauseOverlay(BlockingOverlay):
         if key == pygame.K_ESCAPE:
             self.kill()
 
+class StartOverlay(BlockingOverlay):
+    def __init__(self, manager: Manager):
+        super().__init__(manager, manager.get_image("intro_screen"))
+
+    def kill(self):
+        music = self.manager.get_sound("firsh_fosh")
+        music.set_volume(0.3)
+        music.play(-1)
+        super().kill()
+
 class WinOverlay(BlockingOverlay):
     def __init__(self, manager: Manager):
         super().__init__(manager)
@@ -949,10 +967,10 @@ class FishLevel:
         self.card_display = self.manager.add(CardDisplay(self.manager))
         self.timer = self.manager.add(Timer(self.manager))
 
-        self.screen_override: BlockingOverlay | None = BlockingOverlay(self.manager, self.manager.get_image("intro_screen"))
+        self.screen_override: BlockingOverlay | None = StartOverlay(self.manager)
 
         if skip_intro:
-            self.screen_override = None
+            self.screen_override.kill()
 
         self.debug_mode = False
         self.debug_font = pygame.font.SysFont("Trebuchet MS", 20, False)
@@ -978,6 +996,12 @@ class FishLevel:
         if key == pygame.K_ESCAPE:
             self.screen_override = PauseOverlay(self.manager, self.game_surface)
 
+        # cheats
+        # if key == pygame.K_l:
+        #     for card in self.manager.groups["card"].sprites():
+        #         if len(self.manager.groups["card"]) > 1:
+        #             card.kill()
+
     def on_mouse_down(self, button: int, position: Vec2):
         if self.screen_override:
             self.screen_override.on_mouse_down(button, position)
@@ -1001,6 +1025,7 @@ class FishLevel:
         pygame.draw.rect(surface, (255, 0, 0), (*self.camera.world_to_screen(self.player.nose_hitbox.topleft), *self.player.nose_hitbox.size), width = 1)
 
     def restart(self):
+        self.manager.get_sound("firsh_fosh").stop()
         self.__init__(self.game, True)
 
     def update(self):
@@ -1010,7 +1035,7 @@ class FishLevel:
             return
 
         if not self.finished and len(self.manager.groups["card"]) == 0:
-            self.manager.play_sound("win", 0.4)
+            self.manager.play_sound("win", 0.1)
             self.finished = True
             self.screen_override = WinOverlay(self.manager)
 
