@@ -1,3 +1,5 @@
+assets that were not made by me are listed below:
+
 assets/font/stone_age.ttf = https://www.fontspace.com/stone-age-font-f2148
 assets/sound/pickup.mp3 = https://pixabay.com/sound-effects/ripping-paper-quick-167418
 assets/sound/splash.mp3 = https://pixabay.com/sound-effects/splash-by-blaukreuz-6261
