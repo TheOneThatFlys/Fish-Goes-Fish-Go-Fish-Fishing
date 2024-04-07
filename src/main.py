@@ -2,6 +2,10 @@
 # Code is pretty spaghetti, blame gamejam
 # Should have seperated this into seperate files...
 
+# TODO:
+# add volume sliders
+# bubbles
+
 from __future__ import annotations
 
 import math, time, os, random, sys
@@ -20,9 +24,8 @@ Colour = tuple[int, int, int]
 Group = Literal["render", "update", "card", "gui"]
 Axis = Literal["x", "y"]
 
-SCREEN_SIZE = pygame.Vector2(1280, 720)
 FPS = 60
-LAYER_HEIGHT = SCREEN_SIZE.y * 2
+LAYER_HEIGHT = 1440
 HALF_PI = math.pi / 2
 TWO_PI = math.pi * 2
 ANIMATION_TIME = 10
@@ -98,6 +101,11 @@ class Manager:
         self.cursor_state = pygame.SYSTEM_CURSOR_ARROW
         self.queued_cursor_state = self.cursor_state
 
+        self.screen_size = pygame.Vector2(pygame.display.get_surface().get_size())
+
+        self.sfx_volume = 1.0
+        self.music_volume = 1.0
+
     def load(self, path_to_assets: str):
         for root, dirnames, filenames in os.walk(path_to_assets):
             for filename in filenames:
@@ -122,7 +130,7 @@ class Manager:
 
     def play_sound(self, key: str, relative_volume: float = 1):
         s = self.get_sound(key)
-        s.set_volume(relative_volume)
+        s.set_volume(relative_volume * self.sfx_volume)
         s.play()
 
     def get(self, key: str):
@@ -150,6 +158,9 @@ class Manager:
             pygame.mouse.set_cursor(self.queued_cursor_state)
             self.cursor_state = self.queued_cursor_state
 
+    def on_resize(self, new_size: Vec2):
+        self.screen_size = pygame.Vector2(new_size)
+
 class Sprite(pygame.sprite.Sprite):
     def __init__(self, manager: Manager, groups: list[Group] = ["render", "update"]):
         super().__init__()
@@ -159,12 +170,9 @@ class Sprite(pygame.sprite.Sprite):
         self.z_index = 0
 
 class TextBox(Sprite):
-    def __init__(self, manager: Manager, text: str, font_size: int = 20, colour: Colour = (255, 255, 255), font: Optional[pygame.font.Font] = None, **rect_args):
-        super().__init__(manager, groups = ["gui", "update"])
-        if font:
-            self.font = font
-        else:
-            self.font = pygame.font.SysFont("Trebuchet MS", font_size)
+    def __init__(self, manager: Manager, text: str, font_size: int = 20, colour: Colour = (255, 255, 255), font: str = "stone_age", **rect_args):
+        super().__init__(manager, [])
+        self.font = self.manager.get_font(font)
 
         self.text = text
         self.font_size = font_size
@@ -175,11 +183,14 @@ class TextBox(Sprite):
 
     def set_text(self, text: str):
         self.text = text
-        self.image = self.font.render(text, True, self.colour)
+        self.image, _ = self.font.render(text, self.colour, size = self.font_size)
         self.rect = self.image.get_rect(**self.rect_args)
 
     def update(self):
         pass
+
+    def render(self, surface: pygame.Surface):
+        surface.blit(self.image, self.rect)
 
 class Button(Sprite):
     def __init__(self, manager: Manager, image: pygame.Surface, hover_image: Optional[pygame.Surface] = None, click_func: Callable[..., None] = None, click_args: list = [], **rect_args):
@@ -210,6 +221,61 @@ class Button(Sprite):
 
     def render(self, surface: pygame.Surface):
         surface.blit(self.image, self.rect)
+
+class Slider(Sprite):
+    def __init__(self, manager: Manager, center: Vec2, length: int, text: str, colour: Colour = (255, 255, 255)):
+        super().__init__(manager)
+        BAR_HEIGHT = 4
+        BUTTON_RADIUS = 8
+
+        self.image = pygame.Surface((length, BAR_HEIGHT * 3), pygame.SRCALPHA)
+        self.rect = self.image.get_rect(center = center)
+        pygame.draw.rect(self.image, colour, [0, BAR_HEIGHT, self.rect.width, BAR_HEIGHT], border_radius = int(BAR_HEIGHT / 2))
+
+        self.selected = False
+        self.button_image = pygame.Surface((BUTTON_RADIUS * 2, BUTTON_RADIUS * 2), pygame.SRCALPHA)
+        self.button_rect = self.button_image.get_rect(centery = self.rect.centery, centerx = self.rect.x)
+        # pygame.gfxdraw.filled_circle(self.button_image, BUTTON_RADIUS, BUTTON_RADIUS, BUTTON_RADIUS, colour)
+        pygame.draw.circle(self.button_image, colour, (BUTTON_RADIUS, BUTTON_RADIUS), BUTTON_RADIUS)
+        # self.button_image = pygame.transform.smoothscale_by(self.button_image, 3)
+        # self.button_image = pygame.transform.smoothscale_by(self.button_image, 1/3)
+
+        self.label_text = TextBox(self.manager, text, 20, right = self.rect.left - 8, centery = self.rect.centery)
+        self.percentage_text = TextBox(self.manager, "0", 20, x = self.rect.right + 8, centery = self.rect.centery)
+
+    def on_mouse_down(self, button: int, position: Vec2):
+        if button == 1 and self.rect.collidepoint(position):
+            self.button_rect.centerx = position[0]
+            self.selected = True
+
+    def update_percentage_text(self):
+        self.percentage_text.set_text(str(round(self.get_value() * 100)))
+
+    def update(self):
+        if self.selected:
+            if not pygame.mouse.get_pressed()[0]:
+                self.selected = False
+                return
+
+            mouse_pos = pygame.mouse.get_pos()
+            self.button_rect.centerx = mouse_pos[0]
+
+            self.button_rect.centerx = clamp(self.button_rect.centerx, self.rect.left, self.rect.right)
+
+            self.update_percentage_text()
+
+    def set_value(self, v: float):
+        self.button_rect.centerx = v * self.rect.width + self.rect.x
+        self.update_percentage_text()
+
+    def get_value(self) -> float:
+        return (self.button_rect.centerx - self.rect.x) / self.rect.width
+
+    def render(self, surface: pygame.Surface):
+        surface.blit(self.image, self.rect)
+        surface.blit(self.button_image, self.button_rect)
+        self.label_text.render(surface)
+        self.percentage_text.render(surface)
 
 class Player(Sprite):
     def __init__(self, manager: Manager, initial_velocity: Vec2 = (0, 0)):
@@ -458,12 +524,9 @@ class Ocean(Sprite):
         self.wave_interval = 8
         self.spread = 0.1 / self.wave_interval
         self.passes = 8
-        self.add_springs()
 
-    def add_springs(self):
         self.springs: dict[int, WaterSpring] = {}
-        for i in range(0, int(SCREEN_SIZE.x * 2), self.wave_interval):
-            self.add_spring(i)
+        self.add_spring(0)
 
     def update_springs(self):
         for _ in range(self.passes):
@@ -491,21 +554,21 @@ class Ocean(Sprite):
         left_most_point = min(self.springs.keys())
         right_most_point = max(self.springs.keys())
 
-        while left_most_point > self.player.rect.centerx - SCREEN_SIZE.x:
+        while left_most_point > self.player.rect.centerx - self.manager.screen_size.x:
             pos = left_most_point - self.wave_interval
             self.add_spring(pos)
             left_most_point = pos
 
-        while left_most_point < self.player.rect.centerx - SCREEN_SIZE.x:
+        while left_most_point < self.player.rect.centerx - self.manager.screen_size.x:
             self.remove_spring(left_most_point)
             left_most_point += self.wave_interval
         
-        while right_most_point < self.player.rect.centerx + SCREEN_SIZE.x:
+        while right_most_point < self.player.rect.centerx + self.manager.screen_size.x:
             pos = right_most_point + self.wave_interval
             self.add_spring(pos)
             right_most_point = pos
 
-        while right_most_point > self.player.rect.centerx + SCREEN_SIZE.x:
+        while right_most_point > self.player.rect.centerx + self.manager.screen_size.x:
             self.remove_spring(right_most_point)
             right_most_point -= self.wave_interval
 
@@ -525,8 +588,8 @@ class Ocean(Sprite):
 
         points.sort(key = lambda point: point.x)
 
-        points.insert(0, (0, SCREEN_SIZE.y))
-        points.append((SCREEN_SIZE.x, SCREEN_SIZE.y))
+        points.insert(0, (0, self.manager.screen_size.y))
+        points.append((self.manager.screen_size.x, self.manager.screen_size.y))
 
         pygame.draw.polygon(surface, self.colour, points)
 
@@ -540,7 +603,7 @@ class Ocean(Sprite):
         self.update_springs()
 
     def render(self, surface):
-        covered_rect = pygame.Rect(0, max(self.manager.get("camera").world_to_screen(pygame.Vector2(0, 0)).y + self.target_wave_height, 0), *SCREEN_SIZE)
+        covered_rect = pygame.Rect(0, max(self.manager.get("camera").world_to_screen(pygame.Vector2(0, 0)).y + self.target_wave_height, 0), *self.manager.screen_size)
         surface.fill(self.colour, covered_rect)
 
         self.draw_waves(surface)
@@ -550,11 +613,11 @@ class WallLeft(Sprite):
         super().__init__(manager, groups = ["render"])
         self.id = "wall-left"
 
-        self.image = pygame.Surface((SCREEN_SIZE.x, WORLD_BOTTOM + SCREEN_SIZE.y), pygame.SRCALPHA)
+        self.image = pygame.Surface((1280, WORLD_BOTTOM + LAYER_HEIGHT), pygame.SRCALPHA)
         self.rect = self.image.get_rect(top = 0, right = 0)
         self.image.fill(COLOUR_BORDER)
 
-        beach = pygame.Surface((SCREEN_SIZE.x, SCREEN_SIZE.y))
+        beach = pygame.Surface((1280, 720))
         draw_gradient(beach, COLOUR_BEACH, COLOUR_BORDER)
 
         self.image.blit(beach, (0, 0))
@@ -576,7 +639,7 @@ class Floor(Sprite):
         super().__init__(manager, groups = ["render"])
         self.id = "floor"
 
-        self.image = pygame.Surface((WORLD_RIGHT - WORLD_LEFT + LAYER_HEIGHT * 2, SCREEN_SIZE.y))
+        self.image = pygame.Surface((WORLD_RIGHT - WORLD_LEFT + LAYER_HEIGHT * 2, LAYER_HEIGHT))
         self.rect = self.image.get_rect(top = LAYER_HEIGHT * 5, left = 0)
         self.image.fill(COLOUR_BORDER)
 
@@ -710,7 +773,7 @@ class Compass(Sprite):
 
     def render_background(self) -> pygame.Surface:
         surf = pygame.Surface(self.size, pygame.SRCALPHA)
-        rect = surf.get_rect(bottomright = (SCREEN_SIZE - (8, 8)))
+        rect = surf.get_rect(bottomright = (self.manager.screen_size - (8, 8)))
 
         radius = rect.width / 2 - 1
 
@@ -744,7 +807,7 @@ class Compass(Sprite):
 
     def draw_image(self):
         self.image = pygame.Surface(self.size, pygame.SRCALPHA)
-        self.rect = self.image.get_rect(bottomright = (SCREEN_SIZE - (8, 8)))
+        self.rect = self.image.get_rect(bottomright = (self.manager.screen_size - (8, 8)))
         self.image.blit(self.bg, (0, 0))
 
         if len(self.manager.groups["card"]) == 0:
@@ -787,7 +850,7 @@ class CardDisplay(Sprite):
 
     def draw_image(self):
         self.image = pygame.Surface((self.card_size[0] * 13 + self.horizontal_padding * 12, self.card_size[1] + 3 * self.vertical_padding), pygame.SRCALPHA)
-        self.rect = self.image.get_rect(bottom = SCREEN_SIZE.y - 8, x = 8)
+        self.rect = self.image.get_rect(bottom = self.manager.screen_size.y - 8, x = 8)
 
         for suit, cards in enumerate(self.collected_cards):
             for value in range(1, 14):
@@ -835,7 +898,7 @@ class Timer(Sprite):
 
     def draw_image(self, text: str):
         self.image, self.rect = self.manager.get_font().render(text, (255, 255, 255), size = 32)
-        self.rect.centerx = SCREEN_SIZE.x / 2
+        self.rect.centerx = self.manager.screen_size.x / 2
         self.rect.y = 32
 
     def update(self):
@@ -854,6 +917,9 @@ class BlockingOverlay(Sprite):
 
     def update(self):
         pass
+
+    def on_resize(self, new_size: Vec2):
+        self.image = pygame.transform.smoothscale(self.image, new_size)
 
     def on_key_down(self, key: int):
         pass
@@ -885,11 +951,32 @@ class PauseOverlay(BlockingOverlay):
         self.image.blit(title_surf, title_rect)
         self.image.blit(subtitle_surf, subtitle_rect)
 
-    def on_mouse_down(self, button: int, position: Vec2): ... # override default pause behaviour
+        self.sfx_slider = Slider(self.manager, (self.rect.centerx, self.rect.centery + 120), 256, "SFX")
+        self.sfx_slider.set_value(self.manager.sfx_volume / 2)
+        
+        self.music_slider = Slider(self.manager, (self.rect.centerx, self.rect.centery + 160), 256, "MUSIC")
+        self.music_slider.set_value(self.manager.music_volume / 2)
+
+    def on_mouse_down(self, button: int, position: Vec2):
+        self.sfx_slider.on_mouse_down(button, position)
+        self.music_slider.on_mouse_down(button, position)
 
     def on_key_down(self, key: int):
         if key == pygame.K_ESCAPE:
             self.kill()
+
+    def update(self):
+        self.sfx_slider.update()
+        self.music_slider.update()
+
+        self.manager.sfx_volume = self.sfx_slider.get_value() * 2
+        self.manager.music_volume = self.music_slider.get_value() * 2
+        self.manager.get_sound("firsh_fosh").set_volume(0.3 * self.manager.music_volume)
+
+    def render(self, surface):
+        surface.blit(self.image, self.rect)
+        self.sfx_slider.render(surface)
+        self.music_slider.render(surface)
 
 class StartOverlay(BlockingOverlay):
     def __init__(self, manager: Manager):
@@ -897,7 +984,7 @@ class StartOverlay(BlockingOverlay):
 
     def kill(self):
         music = self.manager.get_sound("firsh_fosh")
-        music.set_volume(0.3)
+        music.set_volume(0.3 * self.manager.music_volume)
         music.play(-1)
         super().kill()
 
@@ -912,7 +999,7 @@ class WinOverlay(BlockingOverlay):
         f = self.manager.get_font()
         
         t_image, _ = f.render(f"Completed in {round(self.manager.get('timer').time, 2)}s", TEXT_COLOUR_2, size = 30)
-        self.image.blit(t_image, t_image.get_rect(centerx = SCREEN_SIZE.x / 2, centery = 160))
+        self.image.blit(t_image, t_image.get_rect(centerx = self.manager.screen_size.x / 2, centery = 160))
 
         p_image, _ = f.render("Play Again", TEXT_COLOUR_2, size = 32)
         q_image, _ = f.render("Quit", TEXT_COLOUR_2, size = 32)
@@ -923,7 +1010,7 @@ class WinOverlay(BlockingOverlay):
         level: FishLevel = self.manager.get("level")
         game: Game = self.manager.get("game")
 
-        self.play_button = Button(self.manager, image = p_image, hover_image = p_hover, click_func = level.restart, centery = SCREEN_SIZE.y - 120, centerx = SCREEN_SIZE.x / 2)
+        self.play_button = Button(self.manager, image = p_image, hover_image = p_hover, click_func = level.restart, centery = self.manager.screen_size.y - 120, centerx = self.manager.screen_size.x / 2)
         self.quit_button = Button(self.manager, image = q_image, hover_image = q_hover, click_func = game.queue_close, top = self.play_button.rect.bottom + 8, centerx = self.play_button.rect.centerx)
 
     def on_mouse_down(self, button: int, position: Vec2):
@@ -997,22 +1084,32 @@ class FishLevel:
             self.screen_override = PauseOverlay(self.manager, self.game_surface)
 
         # cheats
-        # if key == pygame.K_l:
-        #     for card in self.manager.groups["card"].sprites():
-        #         if len(self.manager.groups["card"]) > 1:
-        #             card.kill()
+        if key == pygame.K_l:
+            for card in self.manager.groups["card"].sprites():
+                if len(self.manager.groups["card"]) > 1:
+                    card.kill()
+
+        if key == pygame.K_F3:
+            self.debug_mode = not self.debug_mode
 
     def on_mouse_down(self, button: int, position: Vec2):
         if self.screen_override:
             self.screen_override.on_mouse_down(button, position)
 
+    def on_resize(self, new_size: Vec2):
+        self.manager.on_resize(new_size)
+        self.game_surface = pygame.Surface(new_size)
+        if self.screen_override:
+            self.screen_override.on_resize(new_size)
+
     def draw_debug(self, surface: pygame.Surface):
+        f = self.manager.get_font()
         fps = self.manager.get("game").clock.get_fps()
-        fps_surf = self.debug_font.render(f"{round(fps)} fps", True, (255, 255, 255))
+        fps_surf, _ = f.render(f"{round(fps)} fps", (255, 255, 255), size = 24)
         fps_rect = fps_surf.get_rect()
         surface.blit(fps_surf, (0, 0))
 
-        pos_surf = self.debug_font.render(f"{self.player.rect.centerx}, {self.player.rect.centery}", True, (255, 255, 255))
+        pos_surf, _ = f.render(f"{self.player.rect.centerx}, {self.player.rect.centery}", (255, 255, 255), size = 24)
         pos_rect = pos_surf.get_rect(top = fps_rect.bottom)
         surface.blit(pos_surf, pos_rect)
 
@@ -1066,30 +1163,25 @@ class Camera(Sprite):
         self.target = target
         self.position = pygame.Vector2(target.rect.center)
 
-        self.half_screen_size = SCREEN_SIZE / 2
-
     def update(self):
         # move towards target with smoothing
         self.position += (self.target.rect.center - self.position) * 0.2
 
     def world_to_screen(self, coords: Vec2) -> Vec2:
-        return coords - self.position + self.half_screen_size
+        return coords - self.position + self.manager.screen_size / 2
     
     def screen_to_world(self, coords: Vec2) -> Vec2:
-        return coords + self.position - self.half_screen_size
+        return coords + self.position - self.manager.screen_size / 2
 
     def render(self, surface: pygame.Surface, group: pygame.sprite.Group):
-        offset = pygame.Vector2(
-            int(self.position.x) - self.half_screen_size.x,
-            int(self.position.y) - self.half_screen_size.y
-        )
+        offset = pygame.Vector2(int(self.position.x), int(self.position.y)) - self.manager.screen_size / 2
 
         for item in sorted(group.sprites(), key = lambda sprite: sprite.z_index):
             surface.blit(item.image, item.rect.topleft - offset)
 
 class Game:
     def __init__(self):
-        self.window = pygame.display.set_mode(SCREEN_SIZE)
+        self.window = pygame.display.set_mode((1280, 720))
         self.clock = pygame.time.Clock()
 
         pygame.display.set_caption("Fish Goes Fish Go Fish Fishing")
@@ -1113,6 +1205,8 @@ class Game:
                     self.level.on_key_down(event.key)
                 if event.type == pygame.MOUSEBUTTONDOWN:
                     self.level.on_mouse_down(event.button, pygame.mouse.get_pos())
+                if event.type == pygame.WINDOWRESIZED:
+                    self.level.on_resize((event.x, event.y))
 
             self.window.fill((0, 0, 0))
 
