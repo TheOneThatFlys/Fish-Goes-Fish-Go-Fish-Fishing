@@ -55,6 +55,8 @@ if getattr(sys, "frozen", None):
 else:
     ASSETS_PATH = os.path.normpath(os.path.join(os.path.curdir, "src", "assets"))
 
+persistant_game_data = {}
+
 def lerp(start: float, end: float, a: float):
     return (1 - a) * start + a * end
 
@@ -103,9 +105,6 @@ class Manager:
 
         self.screen_size = pygame.Vector2(pygame.display.get_surface().get_size())
 
-        self.sfx_volume = 1.0
-        self.music_volume = 1.0
-
     def load(self, path_to_assets: str):
         for root, dirnames, filenames in os.walk(path_to_assets):
             for filename in filenames:
@@ -118,6 +117,22 @@ class Manager:
 
                 elif filename.endswith(".ttf"):
                     self.fonts[filename.removesuffix(".ttf")] = pygame.freetype.Font(full_path)
+
+        if persistant_game_data:
+            self.set_volume("sfx", persistant_game_data["sfx"])
+            self.set_volume("music", persistant_game_data["music"])
+        else:
+            self.set_volume("sfx", 1.0)
+            self.set_volume("music", 1.0)
+
+    def set_volume(self, type: Literal["sfx", "music"], volume: float):
+        if type == "sfx":
+            self.sfx_volume = volume
+        else:
+            self.music_volume = volume
+        
+        persistant_game_data[type] = volume
+        print(persistant_game_data)
 
     def get_image(self, key: str) -> pygame.Surface:
         return self.images[key]
@@ -969,8 +984,8 @@ class PauseOverlay(BlockingOverlay):
         self.sfx_slider.update()
         self.music_slider.update()
 
-        self.manager.sfx_volume = self.sfx_slider.get_value() * 2
-        self.manager.music_volume = self.music_slider.get_value() * 2
+        self.manager.set_volume("sfx", self.sfx_slider.get_value() * 2)
+        self.manager.set_volume("music", self.music_slider.get_value() * 2)
         self.manager.get_sound("firsh_fosh").set_volume(0.3 * self.manager.music_volume)
 
     def render(self, surface):
