@@ -1123,8 +1123,8 @@ class FishLevel:
         if key == pygame.K_ESCAPE:
             self.screen_override = PauseOverlay(self.manager, self.game_surface)
 
-        if key == pygame.K_F3:
-            self.debug_mode = not self.debug_mode
+        # if key == pygame.K_F3:
+        #     self.debug_mode = not self.debug_mode
 
     def on_mouse_down(self, button: int, position: Vec2):
         if self.screen_override:
