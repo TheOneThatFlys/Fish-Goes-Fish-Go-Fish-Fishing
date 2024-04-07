@@ -509,7 +509,7 @@ class CardFactory:
         self.value_to_string = [None, "A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"]
         self.font = pygame.font.SysFont("Trebuchet MS", 16, bold = True)
 
-        fishes = ["fimonsh", "fearsh", "floversh", "fladesh"]
+        fishes = ["fimonsh", "fearsh", "flubsh", "fladesh"]
         for fish in fishes:
             self.suits.append(self.manager.get_image(fish))
 
@@ -776,7 +776,7 @@ class BoidManager(Sprite):
         self.create_boids(num_fish_per_group)
 
     def create_boids(self, num_fish_per_group: int):
-        fish_names = ["fimonsh", "fearsh", "floversh", "fladesh"]
+        fish_names = ["fimonsh", "fearsh", "flubsh", "fladesh"]
         for i, group in enumerate(self.fish_groups):
             
             img = self.manager.get_image(fish_names[i])
