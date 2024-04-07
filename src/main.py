@@ -50,6 +50,8 @@ FISH_SIM_AVOID_DIST = 35 * 35
 FISH_SIM_AVOID_PLAYER_DIST = 100 * 100
 FISH_SIM_VISION_DIST = 500 * 500
 
+FISH_SIM_DIST = 2000 * 2000
+
 if getattr(sys, "frozen", None):
     ASSETS_PATH = "assets"
 else:
@@ -691,6 +693,7 @@ class FishBoid(Sprite):
         self.bounds = bounds
 
         self.player: Player = self.manager.get("player")
+        self.update([]) # update once to render first frame
 
     def go_towards_center(self, boids: list[FishBoid]):
         num_boids = 0
@@ -773,6 +776,7 @@ class BoidManager(Sprite):
         PADDING = 50
         self.bounding_rect = pygame.Rect(WORLD_LEFT + PADDING, PADDING * 4, WORLD_RIGHT - WORLD_LEFT - PADDING, WORLD_BOTTOM - PADDING * 5)
 
+        self.player: Player = self.manager.get("player")
         self.create_boids(num_fish_per_group)
 
     def create_boids(self, num_fish_per_group: int):
@@ -792,6 +796,7 @@ class BoidManager(Sprite):
     def update(self):
         for fish_suit in self.fish_groups:
             for boid in fish_suit.sprites():
+                if (pygame.Vector2(boid.rect.center) - self.player.rect.center).magnitude_squared() > FISH_SIM_DIST: continue
                 boids = [b for b in fish_suit.sprites() if (pygame.Vector2(b.rect.center) - boid.rect.center).magnitude_squared() < FISH_SIM_VISION_DIST]
                 boid.update(boids)
 
@@ -1117,6 +1122,9 @@ class FishLevel:
 
         if key == pygame.K_ESCAPE:
             self.screen_override = PauseOverlay(self.manager, self.game_surface)
+
+        if key == pygame.K_F3:
+            self.debug_mode = not self.debug_mode
 
     def on_mouse_down(self, button: int, position: Vec2):
         if self.screen_override:
