@@ -132,7 +132,6 @@ class Manager:
             self.music_volume = volume
         
         persistant_game_data[type] = volume
-        print(persistant_game_data)
 
     def get_image(self, key: str) -> pygame.Surface:
         return self.images[key]
@@ -250,10 +249,10 @@ class Slider(Sprite):
         self.selected = False
         self.button_image = pygame.Surface((BUTTON_RADIUS * 2, BUTTON_RADIUS * 2), pygame.SRCALPHA)
         self.button_rect = self.button_image.get_rect(centery = self.rect.centery, centerx = self.rect.x)
-        # pygame.gfxdraw.filled_circle(self.button_image, BUTTON_RADIUS, BUTTON_RADIUS, BUTTON_RADIUS, colour)
+        # pygame.gfxdraw.aacircle(self.button_image, BUTTON_RADIUS, BUTTON_RADIUS, BUTTON_RADIUS - 1, colour)
+        # pygame.gfxdraw.filled_circle(self.button_image, BUTTON_RADIUS, BUTTON_RADIUS, BUTTON_RADIUS - 1, colour)
+
         pygame.draw.circle(self.button_image, colour, (BUTTON_RADIUS, BUTTON_RADIUS), BUTTON_RADIUS)
-        # self.button_image = pygame.transform.smoothscale_by(self.button_image, 3)
-        # self.button_image = pygame.transform.smoothscale_by(self.button_image, 1/3)
 
         self.label_text = TextBox(self.manager, text, 20, right = self.rect.left - 8, centery = self.rect.centery)
         self.percentage_text = TextBox(self.manager, "0", 20, x = self.rect.right + 8, centery = self.rect.centery)
@@ -262,6 +261,7 @@ class Slider(Sprite):
         if button == 1 and self.rect.collidepoint(position):
             self.button_rect.centerx = position[0]
             self.selected = True
+            self.update_percentage_text()
 
     def update_percentage_text(self):
         self.percentage_text.set_text(str(round(self.get_value() * 100)))
@@ -291,6 +291,23 @@ class Slider(Sprite):
         surface.blit(self.button_image, self.button_rect)
         self.label_text.render(surface)
         self.percentage_text.render(surface)
+
+class MoveParticle(Sprite):
+    def __init__(self, manager: Manager, start_pos: Vec2, direction: float):
+        super().__init__(manager)
+        COLOUR = (210, 234, 252)
+
+        self.image = pygame.Surface((4, 4), pygame.SRCALPHA)
+        pygame.draw.circle(self.image, COLOUR, (2, 2), 2)
+        self.image.set_alpha(100)
+        self.rect = self.image.get_rect(center = start_pos)
+
+        self.life = random.randint(40, 80)
+
+    def update(self):
+        self.life -= 1
+        if self.life <= 0:
+            self.kill()
 
 class Player(Sprite):
     def __init__(self, manager: Manager, initial_velocity: Vec2 = (0, 0)):
@@ -419,6 +436,9 @@ class Player(Sprite):
         # look towards
         if self.velocity.magnitude() != 0:
             self.direction = math.atan2(self.velocity.y, self.velocity.x)
+
+        if self.velocity.magnitude() > 0 and self.rect.centery > 0:
+            self.manager.add(MoveParticle(self.manager, self.rect.center, self.direction))
 
         image_used = self.animation_frames[self.current_index]
         if self.direction > HALF_PI or self.direction < -HALF_PI:
@@ -1097,15 +1117,6 @@ class FishLevel:
 
         if key == pygame.K_ESCAPE:
             self.screen_override = PauseOverlay(self.manager, self.game_surface)
-
-        # cheats
-        if key == pygame.K_l:
-            for card in self.manager.groups["card"].sprites():
-                if len(self.manager.groups["card"]) > 1:
-                    card.kill()
-
-        if key == pygame.K_F3:
-            self.debug_mode = not self.debug_mode
 
     def on_mouse_down(self, button: int, position: Vec2):
         if self.screen_override:
